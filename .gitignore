@@ -1,0 +1,22 @@
+# Gradle files
+.gradle/
+build/
+
+# IDE files
+.idea/
+*.iml
+*.iws
+
+# Minecraft run directory
+run/
+logs/
+
+# Native build files
+src/main/cpp/build/
+*.dll
+*.so
+*.dylib
+
+# Others
+.DS_Store
+at.cfg

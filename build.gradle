@@ -1,0 +1,64 @@
+plugins {
+    id 'java-library'
+    id 'eclipse'
+    id 'idea'
+    id 'net.neoforged.moddev' version '1.0.17'
+}
+
+tasks.named('wrapper', Wrapper).configure {
+    gradleVersion = '8.10'
+    distributionType = Wrapper.DistributionType.BIN
+}
+
+version = project.mod_version
+group = 'com.example.planetmapper'
+
+repositories {
+    mavenLocal()
+    maven { url "https://maven.shedaniel.me/" }
+}
+
+dependencies {
+    implementation "me.shedaniel.cloth:cloth-config-neoforge:15.0.140"
+    compileOnly files("run/mods/immersive_portals-6.0.7-all-1.21.1-neoforge.jar")
+}
+
+base {
+    archivesName = project.mod_id
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+neoForge {
+    version = project.neo_version
+
+
+
+    runs {
+        configureEach {
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            systemProperty 'forge.logging.console.level', 'debug'
+        }
+
+        client {
+            client()
+            systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        server {
+            server()
+            programArgument '--nogui'
+            systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        }
+    }
+
+    mods {
+        "${project.mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }

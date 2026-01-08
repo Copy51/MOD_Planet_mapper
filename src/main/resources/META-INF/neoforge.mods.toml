@@ -1,0 +1,39 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="All Rights Reserved"
+issueTrackerURL="https://github.com/"
+
+[[mods]]
+modId="planetmapper"
+version="${file.jarVersion}"
+displayName="Planet Mapper"
+authors="Antigravity, User"
+description='''
+A mod that makes the world cyclic.
+'''
+logoFile="logo.png"
+
+[[dependencies.planetmapper]]
+modId="neoforge"
+type="required"
+versionRange="[21.1,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.planetmapper]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.22)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.planetmapper]]
+modId="imm_ptl"
+type="optional"
+versionRange="[6.0.0,)"
+ordering="NONE"
+side="BOTH"
+
+[[mixins]]
+config="planetmapper.mixins.json"
+
