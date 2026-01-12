@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
+
+# CRITICAL: Set MSVC runtime BEFORE project() to ensure consistency
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+
 project(NativePhysics VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
