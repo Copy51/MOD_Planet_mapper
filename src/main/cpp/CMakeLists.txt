@@ -10,7 +10,8 @@ include(FetchContent)
 # Use ZIP archive for stability and performance (no Git clone overhead/interactivity issues)
 FetchContent_Declare(
   jolt
-  URL https://github.com/joltphysics/joltphysics/archive/refs/heads/main.zip
+  GIT_REPOSITORY https://github.com/joltphysics/joltphysics.git
+  GIT_TAG        master
 )
 
 FetchContent_MakeAvailable(jolt)
