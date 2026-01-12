@@ -7,11 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Jolt Physics Configuration
 include(FetchContent)
 
-# Option to use local Jolt if FetchContent is too slow
+# Use ZIP archive for stability and performance (no Git clone overhead/interactivity issues)
 FetchContent_Declare(
   jolt
-  GIT_REPOSITORY https://github.com/joltphysics/joltphysics.git
-  GIT_TAG        master
+  URL https://github.com/joltphysics/joltphysics/archive/refs/heads/master.zip
 )
 
 FetchContent_MakeAvailable(jolt)
@@ -19,10 +18,10 @@ FetchContent_MakeAvailable(jolt)
 # Configure Jolt build options
 set(USE_SSE4_2 ON CACHE BOOL "" FORCE)
 set(USE_AVX ON CACHE BOOL "" FORCE)
-# Disable samples and tests to speed up build
 set(SAMPLES OFF CACHE BOOL "" FORCE)
 set(PERF_TEST OFF CACHE BOOL "" FORCE)
 set(UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(GENERATE_DEBUG_SYMBOLS OFF CACHE BOOL "" FORCE)
 
 # Create the DLL
 add_library(native_physics SHARED 
@@ -31,13 +30,16 @@ add_library(native_physics SHARED
 )
 
 # Link Jolt Physics
+# FetchContent makes 'jolt' source dir available via ${jolt_SOURCE_DIR}
+target_include_directories(native_physics PRIVATE ${jolt_SOURCE_DIR})
 target_link_libraries(native_physics PRIVATE Jolt)
 
-# Directives for the compiler (Windows Specific)
+# Directives for the compiler
 if(WIN32)
-    target_compile_definitions(native_physics PRIVATE _CRT_SECURE_NO_WARNINGS)
-    # Enable AVX2/SSE for performance
-    target_compile_options(native_physics PRIVATE /arch:AVX2)
+    target_compile_definitions(native_physics PRIVATE _CRT_SECURE_NO_WARNINGS JPH_PLATFORM_WINDOWS)
+    target_compile_options(native_physics PRIVATE /arch:AVX2 /W4)
+else()
+    target_compile_definitions(native_physics PRIVATE JPH_PLATFORM_LINUX)
 endif()
 
 # Installation logic (optional, for convenience)
