@@ -3,29 +3,34 @@ project(NativePhysics VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Jolt Physics Configuration
 include(FetchContent)
 
-# Use ZIP archive for stability and performance
 FetchContent_Declare(
-  jolt
+  JoltPhysics
   URL https://github.com/jrouwe/JoltPhysics/archive/refs/heads/master.zip
 )
 
-# Configure Jolt build options (MUST be before FetchContent_MakeAvailable)
-set(TARGET_JOLT_PHYSICS ON CACHE BOOL "" FORCE)
+# Configure Jolt build options BEFORE populating
+set(TARGET_HELLO_WORLD OFF CACHE BOOL "" FORCE)
+set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)
+set(TARGET_SAMPLES OFF CACHE BOOL "" FORCE)
+set(TARGET_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(TARGET_VIEWER OFF CACHE BOOL "" FORCE)
 set(USE_SSE4_2 ON CACHE BOOL "" FORCE)
 set(USE_AVX ON CACHE BOOL "" FORCE)
-set(SAMPLES OFF CACHE BOOL "" FORCE)
-set(JOB_SYSTEM_EXAMPLE OFF CACHE BOOL "" FORCE)
-set(PERF_TEST OFF CACHE BOOL "" FORCE)
-set(UNIT_TESTS OFF CACHE BOOL "" FORCE)
-set(GENERATE_DEBUG_SYMBOLS OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION ON CACHE BOOL "" FORCE)
 
-# Make Jolt available
-FetchContent_MakeAvailable(jolt)
+# Populate JoltPhysics
+FetchContent_GetProperties(JoltPhysics)
+if(NOT joltphysics_POPULATED)
+    FetchContent_Populate(JoltPhysics)
+    # JoltPhysics's actual CMake is in Build subdirectory
+    add_subdirectory(${joltphysics_SOURCE_DIR}/Build ${joltphysics_BINARY_DIR})
+endif()
 
 # Create the DLL
 add_library(native_physics SHARED 
@@ -33,19 +38,19 @@ add_library(native_physics SHARED
     physics_bridge.h
 )
 
-# Link Jolt Physics
-target_include_directories(native_physics PRIVATE ${jolt_SOURCE_DIR})
+# Link Jolt Physics - include the main Jolt directory for headers
+target_include_directories(native_physics PRIVATE ${joltphysics_SOURCE_DIR})
 target_link_libraries(native_physics PRIVATE Jolt)
 
-# Directives for the compiler
+# Compiler settings
 if(WIN32)
-    target_compile_definitions(native_physics PRIVATE _CRT_SECURE_NO_WARNINGS JPH_PLATFORM_WINDOWS)
-    target_compile_options(native_physics PRIVATE /arch:AVX2 /W4 /MP)
+    target_compile_options(native_physics PRIVATE /arch:AVX2 /W3 /MP)
 else()
-    target_compile_definitions(native_physics PRIVATE JPH_PLATFORM_LINUX)
+    target_compile_options(native_physics PRIVATE -mavx2 -msse4.2)
 endif()
 
-# Installation logic (optional, for convenience)
+# Installation logic
 install(TARGETS native_physics
-    DESTINATION ${CMAKE_SOURCE_DIR}/../../../
+    RUNTIME DESTINATION ${CMAKE_SOURCE_DIR}/../../../
+    LIBRARY DESTINATION ${CMAKE_SOURCE_DIR}/../../../
 )
