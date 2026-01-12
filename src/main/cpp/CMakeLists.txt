@@ -48,11 +48,6 @@ add_library(native_physics SHARED
 target_include_directories(native_physics PRIVATE ${joltphysics_SOURCE_DIR})
 target_link_libraries(native_physics PRIVATE Jolt)
 
-# Match Jolt's Static Runtime configuration
-if(MSVC)
-    set_property(TARGET native_physics PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
 # Compiler settings
 if(WIN32)
     target_compile_options(native_physics PRIVATE /arch:AVX2 /W3 /MP)
