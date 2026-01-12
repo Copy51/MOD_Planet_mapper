@@ -16,10 +16,87 @@
 
 // Layers used for collision (simplified)
 namespace Layers {
-    static constexpr uint8_t UNUSED = 0;
-    static constexpr uint8_t MOVING = 1;
-    static constexpr uint8_t STATIC = 2;
-    static constexpr uint8_t NUM_LAYERS = 3;
+    static constexpr JPH::ObjectLayer MOVING = 0;
+    static constexpr JPH::ObjectLayer STATIC = 1;
+    static constexpr JPH::ObjectLayer NUM_LAYERS = 2;
+};
+
+namespace BroadPhaseLayers {
+    static constexpr JPH::BroadPhaseLayer MOVING(0);
+    static constexpr JPH::BroadPhaseLayer STATIC(1);
+    static constexpr JPH::uint NUM_LAYERS(2);
+};
+
+// Class that determines if two object layers can collide
+class ObjectLayerPairFilterImpl : public JPH::ObjectLayerPairFilter
+{
+public:
+    virtual bool ShouldCollide(JPH::ObjectLayer inObject1, JPH::ObjectLayer inObject2) const override
+    {
+        switch (inObject1)
+        {
+        case Layers::MOVING:
+            return true; // Moving collides with everything
+        case Layers::STATIC:
+            return inObject2 == Layers::MOVING; // Static only collides with moving
+        default:
+            return false;
+        }
+    }
+};
+
+// Class that maps object layers to broad phase layers
+class BPLayerInterfaceImpl : public JPH::BroadPhaseLayerInterface
+{
+public:
+    BPLayerInterfaceImpl()
+    {
+        mObjectToBroadPhase[Layers::MOVING] = BroadPhaseLayers::MOVING;
+        mObjectToBroadPhase[Layers::STATIC] = BroadPhaseLayers::STATIC;
+    }
+
+    virtual JPH::uint GetNumBroadPhaseLayers() const override
+    {
+        return BroadPhaseLayers::NUM_LAYERS;
+    }
+
+    virtual JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override
+    {
+        return mObjectToBroadPhase[inLayer];
+    }
+
+#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
+    virtual const char *GetBroadPhaseLayerName(JPH::BroadPhaseLayer inLayer) const override
+    {
+        switch ((JPH::BroadPhaseLayer::Type)inLayer)
+        {
+        case (JPH::BroadPhaseLayer::Type)BroadPhaseLayers::MOVING: return "MOVING";
+        case (JPH::BroadPhaseLayer::Type)BroadPhaseLayers::STATIC: return "STATIC";
+        default: return "INVALID";
+        }
+    }
+#endif // JPH_EXTERNAL_PROFILE || JPH_PROFILE_ENABLED
+
+private:
+    JPH::BroadPhaseLayer mObjectToBroadPhase[Layers::NUM_LAYERS];
+};
+
+// Class that determines if an object layer can collide with a broad phase layer
+class ObjectVsBroadPhaseLayerFilterImpl : public JPH::ObjectVsBroadPhaseLayerFilter
+{
+public:
+    virtual bool ShouldCollide(JPH::ObjectLayer inLayer1, JPH::BroadPhaseLayer inLayer2) const override
+    {
+        switch (inLayer1)
+        {
+        case Layers::MOVING:
+            return true;
+        case Layers::STATIC:
+            return inLayer2 == BroadPhaseLayers::MOVING;
+        default:
+            return false;
+        }
+    }
 };
 
 class PhysicsWorld {
@@ -27,6 +104,11 @@ public:
     JPH::PhysicsSystem mPhysicsSystem;
     JPH::TempAllocatorImpl mTempAllocator;
     JPH::JobSystemThreadPool mJobSystem;
+    
+    // Layer interfaces
+    BPLayerInterfaceImpl mBPLayerInterface;
+    ObjectVsBroadPhaseLayerFilterImpl mObjectVsBroadPhaseLayerFilter;
+    ObjectLayerPairFilterImpl mObjectLayerPairFilter;
 
     PhysicsWorld() : 
         mTempAllocator(10 * 1024 * 1024), // 10MB temp buffer
@@ -36,8 +118,7 @@ public:
         JPH::Factory::sInstance = new JPH::Factory();
         JPH::RegisterTypes();
 
-        // 65536 bodies, 1024 body mutexes, 1024 max proximities, 1024 max collision pairs, 1024 max contact constraints
-        mPhysicsSystem.Init(65536, 1024, 1024, 1024, nullptr, nullptr, nullptr);
+        mPhysicsSystem.Init(65536, 1024, 1024, 1024, mBPLayerInterface, mObjectVsBroadPhaseLayerFilter, mObjectLayerPairFilter);
     }
 
     ~PhysicsWorld() {
@@ -85,7 +166,7 @@ EXPORT uint64_t CreateRigidBody(void* world, float* boxMin, float* boxMax, int b
 
     JPH::BodyCreationSettings settings(result.Get(), JPH::Vec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
     settings.mMassPropertiesOverride.mMass = mass;
-    settings.mMassPropertiesOverride.mInertiaRotation = JPH::Mat44::sIdentity(); // Simplified
+    // mInertiaRotation removed in recent Jolt versions as it's part of the shape or calculated
 
     JPH::Body* body = bi.CreateBody(settings);
     bi.AddBody(body->GetID(), JPH::EActivation::Activate);
@@ -95,7 +176,7 @@ EXPORT uint64_t CreateRigidBody(void* world, float* boxMin, float* boxMax, int b
 
 EXPORT void GetBodyState(void* world, uint64_t bodyId, BodyState* outState) {
     auto* pw = static_cast<PhysicsWorld*>(world);
-    JPH::BodyID id(bodyId);
+    JPH::BodyID id((JPH::uint32)bodyId); // Proper cast to avoid warning
     JPH::BodyInterface &bi = pw->mPhysicsSystem.GetBodyInterface();
 
     if (!bi.IsAdded(id)) return;
@@ -124,7 +205,7 @@ EXPORT void GetBodyState(void* world, uint64_t bodyId, BodyState* outState) {
 
 EXPORT void ApplyForce(void* world, uint64_t bodyId, float fx, float fy, float fz) {
     auto* pw = static_cast<PhysicsWorld*>(world);
-    JPH::BodyID id(bodyId);
+    JPH::BodyID id((JPH::uint32)bodyId);
     pw->mPhysicsSystem.GetBodyInterface().AddForce(id, JPH::Vec3(fx, fy, fz));
 }
 
