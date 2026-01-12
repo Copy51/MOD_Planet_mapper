@@ -23,6 +23,7 @@ set(USE_SSE4_2 ON CACHE BOOL "" FORCE)
 set(USE_AVX ON CACHE BOOL "" FORCE)
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION ON CACHE BOOL "" FORCE)
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
 
 # Populate JoltPhysics
 FetchContent_GetProperties(JoltPhysics)
@@ -41,6 +42,11 @@ add_library(native_physics SHARED
 # Link Jolt Physics - include the main Jolt directory for headers
 target_include_directories(native_physics PRIVATE ${joltphysics_SOURCE_DIR})
 target_link_libraries(native_physics PRIVATE Jolt)
+
+# Match Jolt's Static Runtime configuration
+if(MSVC)
+    set_property(TARGET native_physics PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 # Compiler settings
 if(WIN32)
