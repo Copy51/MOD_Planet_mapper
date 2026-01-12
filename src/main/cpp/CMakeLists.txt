@@ -7,11 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Jolt Physics Configuration
 include(FetchContent)
 
-# Use ZIP archive for stability and performance (no Git clone overhead/interactivity issues)
+# Use ZIP archive for stability and performance (no Git clone overhead)
 FetchContent_Declare(
   jolt
-  GIT_REPOSITORY https://github.com/joltphysics/joltphysics.git
-  GIT_TAG        master
+  URL https://github.com/joltphysics/joltphysics/archive/refs/tags/v5.5.0.zip
 )
 
 FetchContent_MakeAvailable(jolt)
