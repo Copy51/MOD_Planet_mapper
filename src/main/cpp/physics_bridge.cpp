@@ -13,6 +13,7 @@
 
 #include <vector>
 #include <unordered_map>
+#include <algorithm>
 #include <atomic>
 
 // Layers used for collision (simplified)
@@ -186,6 +187,30 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
 
     jfloat* minData = env->GetFloatArrayElements(mins, nullptr);
     jfloat* maxData = env->GetFloatArrayElements(maxs, nullptr);
+    if (!minData || !maxData || boxCount <= 0) {
+        if (minData) env->ReleaseFloatArrayElements(mins, minData, 0);
+        if (maxData) env->ReleaseFloatArrayElements(maxs, maxData, 0);
+        return 0;
+    }
+
+    float minX = minData[0];
+    float minY = minData[1];
+    float minZ = minData[2];
+    float maxX = maxData[0];
+    float maxY = maxData[1];
+    float maxZ = maxData[2];
+
+    for (int i = 1; i < boxCount; ++i) {
+        int offset = i * 3;
+        minX = std::min(minX, minData[offset]);
+        minY = std::min(minY, minData[offset + 1]);
+        minZ = std::min(minZ, minData[offset + 2]);
+        maxX = std::max(maxX, maxData[offset]);
+        maxY = std::max(maxY, maxData[offset + 1]);
+        maxZ = std::max(maxZ, maxData[offset + 2]);
+    }
+
+    JPH::Vec3 bodyCenter((minX + maxX) * 0.5f, (minY + maxY) * 0.5f, (minZ + maxZ) * 0.5f);
 
     JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
 
@@ -197,8 +222,9 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
         
         JPH::Vec3 center = (min + max) * 0.5f;
         JPH::Vec3 halfExtent = (max - min) * 0.5f;
-        
-        compoundSettings.AddShape(center, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent));
+        JPH::Vec3 localCenter = center - bodyCenter;
+
+        compoundSettings.AddShape(localCenter, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent));
     }
 
     env->ReleaseFloatArrayElements(mins, minData, 0);
@@ -207,7 +233,7 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
     JPH::ShapeSettings::ShapeResult result = compoundSettings.Create();
     if (result.HasError()) return 0;
 
-    JPH::BodyCreationSettings settings(result.Get(), JPH::Vec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
+    JPH::BodyCreationSettings settings(result.Get(), bodyCenter, JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
     settings.mMassPropertiesOverride.mMass = mass;
 
     JPH::Body* body = bi.CreateBody(settings);
