@@ -198,8 +198,8 @@ public class ImmersivePortalsHandler {
 
         ChunkLoader existing = activePreloaders.get(player.getUUID());
         if (existing != null) {
-            // Update position if it moved significantly (optional optimization, but IP handles it)
-            if (existing.getCenter().distanceTo(destPos) > 16.0 || !existing.dimension().equals(destKey)) {
+            // If dimension changed, remove old preloader
+            if (!existing.dimension().equals(destKey)) {
                 PortalAPI.removeChunkLoaderForPlayer(player, existing);
                 existing = null;
             }

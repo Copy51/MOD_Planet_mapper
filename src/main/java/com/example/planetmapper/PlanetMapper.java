@@ -64,5 +64,8 @@ public class PlanetMapper {
     @SubscribeEvent
     public void onServerStarting(RegisterCommandsEvent event) {
         LandingCommand.register(event.getDispatcher());
+        com.example.planetmapper.command.PhysicsTestCommand.register(event.getDispatcher());
+        
+        com.example.planetmapper.physics.PhysicsWorldManager.init();
     }
 }

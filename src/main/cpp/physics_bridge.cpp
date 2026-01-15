@@ -1,4 +1,4 @@
-#include "physics_bridge.h"
+#include <jni.h>
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -128,32 +128,45 @@ public:
     }
 };
 
+// JNI functions
+// Note: JNI function names follow the pattern: Java_packagename_ClassName_methodName
+// Package: com.example.planetmapper.physics
+// Class: NativePhysicsEngine
+
 extern "C" {
 
-EXPORT void* InitializePhysicsWorld() {
-    return new PhysicsWorld();
+JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeInitializePhysicsWorld(JNIEnv* env, jclass clazz) {
+    return reinterpret_cast<jlong>(new PhysicsWorld());
 }
 
-EXPORT void SetGravity(void* world, float x, float y, float z) {
-    auto* pw = static_cast<PhysicsWorld*>(world);
-    pw->mPhysicsSystem.SetGravity(JPH::Vec3(x, y, z));
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeSetGravity(JNIEnv* env, jclass clazz, jlong worldPtr, jfloat x, jfloat y, jfloat z) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (pw) {
+        pw->mPhysicsSystem.SetGravity(JPH::Vec3(x, y, z));
+    }
 }
 
-EXPORT void StepPhysics(void* world, float deltaTime) {
-    auto* pw = static_cast<PhysicsWorld*>(world);
-    // 1 collision step, max 1 update
-    pw->mPhysicsSystem.Update(deltaTime, 1, &pw->mTempAllocator, &pw->mJobSystem);
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeStepPhysics(JNIEnv* env, jclass clazz, jlong worldPtr, jfloat deltaTime) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (pw) {
+        pw->mPhysicsSystem.Update(deltaTime, 1, &pw->mTempAllocator, &pw->mJobSystem);
+    }
 }
 
-EXPORT uint64_t CreateRigidBody(void* world, float* boxMin, float* boxMax, int boxCount, float mass) {
-    auto* pw = static_cast<PhysicsWorld*>(world);
-    JPH::BodyInterface &bi = pw->mPhysicsSystem.GetBodyInterface();
+JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCreateRigidBody(JNIEnv* env, jclass clazz, jlong worldPtr, jfloatArray mins, jfloatArray maxs, jint boxCount, jfloat mass) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw) return 0;
+
+    jfloat* minData = env->GetFloatArrayElements(mins, nullptr);
+    jfloat* maxData = env->GetFloatArrayElements(maxs, nullptr);
+
+    JPH::BodyInterface& bi = pw->mPhysicsSystem.GetBodyInterface();
 
     JPH::StaticCompoundShapeSettings compoundSettings;
     for (int i = 0; i < boxCount; ++i) {
         int offset = i * 3;
-        JPH::Vec3 min(boxMin[offset], boxMin[offset+1], boxMin[offset+2]);
-        JPH::Vec3 max(boxMax[offset], boxMax[offset+1], boxMax[offset+2]);
+        JPH::Vec3 min(minData[offset], minData[offset+1], minData[offset+2]);
+        JPH::Vec3 max(maxData[offset], maxData[offset+1], maxData[offset+2]);
         
         JPH::Vec3 center = (min + max) * 0.5f;
         JPH::Vec3 halfExtent = (max - min) * 0.5f;
@@ -161,23 +174,27 @@ EXPORT uint64_t CreateRigidBody(void* world, float* boxMin, float* boxMax, int b
         compoundSettings.AddShape(center, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent));
     }
 
+    env->ReleaseFloatArrayElements(mins, minData, 0);
+    env->ReleaseFloatArrayElements(maxs, maxData, 0);
+
     JPH::ShapeSettings::ShapeResult result = compoundSettings.Create();
     if (result.HasError()) return 0;
 
     JPH::BodyCreationSettings settings(result.Get(), JPH::Vec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
     settings.mMassPropertiesOverride.mMass = mass;
-    // mInertiaRotation removed in recent Jolt versions as it's part of the shape or calculated
 
     JPH::Body* body = bi.CreateBody(settings);
     bi.AddBody(body->GetID(), JPH::EActivation::Activate);
 
-    return body->GetID().GetIndexAndSequenceNumber();
+    return static_cast<jlong>(body->GetID().GetIndexAndSequenceNumber());
 }
 
-EXPORT void GetBodyState(void* world, uint64_t bodyId, BodyState* outState) {
-    auto* pw = static_cast<PhysicsWorld*>(world);
-    JPH::BodyID id((JPH::uint32)bodyId); // Proper cast to avoid warning
-    JPH::BodyInterface &bi = pw->mPhysicsSystem.GetBodyInterface();
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeGetBodyState(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId, jfloatArray outState) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw) return;
+
+    JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
+    JPH::BodyInterface& bi = pw->mPhysicsSystem.GetBodyInterface();
 
     if (!bi.IsAdded(id)) return;
 
@@ -186,31 +203,35 @@ EXPORT void GetBodyState(void* world, uint64_t bodyId, BodyState* outState) {
     JPH::Vec3 vel = bi.GetLinearVelocity(id);
     JPH::Vec3 angVel = bi.GetAngularVelocity(id);
 
-    outState->bodyId = bodyId;
-    outState->posX = (float)pos.GetX();
-    outState->posY = (float)pos.GetY();
-    outState->posZ = (float)pos.GetZ();
-    outState->quatX = rot.GetX();
-    outState->quatY = rot.GetY();
-    outState->quatZ = rot.GetZ();
-    outState->quatW = rot.GetW();
-    outState->velX = vel.GetX();
-    outState->velY = vel.GetY();
-    outState->velZ = vel.GetZ();
-    outState->angVelX = angVel.GetX();
-    outState->angVelY = angVel.GetY();
-    outState->angVelZ = angVel.GetZ();
-    outState->flags = bi.IsActive(id) ? 1 : 0;
+    jfloat state[13];
+    state[0] = static_cast<jfloat>(pos.GetX());
+    state[1] = static_cast<jfloat>(pos.GetY());
+    state[2] = static_cast<jfloat>(pos.GetZ());
+    state[3] = rot.GetX();
+    state[4] = rot.GetY();
+    state[5] = rot.GetZ();
+    state[6] = rot.GetW();
+    state[7] = vel.GetX();
+    state[8] = vel.GetY();
+    state[9] = vel.GetZ();
+    state[10] = angVel.GetX();
+    state[11] = angVel.GetY();
+    state[12] = angVel.GetZ();
+
+    env->SetFloatArrayRegion(outState, 0, 13, state);
 }
 
-EXPORT void ApplyForce(void* world, uint64_t bodyId, float fx, float fy, float fz) {
-    auto* pw = static_cast<PhysicsWorld*>(world);
-    JPH::BodyID id((JPH::uint32)bodyId);
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeApplyForce(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId, jfloat fx, jfloat fy, jfloat fz) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw) return;
+
+    JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
     pw->mPhysicsSystem.GetBodyInterface().AddForce(id, JPH::Vec3(fx, fy, fz));
 }
 
-EXPORT void CleanupPhysicsWorld(void* world) {
-    delete static_cast<PhysicsWorld*>(world);
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCleanupPhysicsWorld(JNIEnv* env, jclass clazz, jlong worldPtr) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    delete pw;
 }
 
 }

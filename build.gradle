@@ -31,15 +31,19 @@ java {
     toolchain.languageVersion = JavaLanguageVersion.of(21)
 }
 
+// Enable preview features for Project Panama (Foreign Function & Memory API)
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs.addAll(['--enable-preview'])
+}
+
 neoForge {
     version = project.neo_version
-
-
 
     runs {
         configureEach {
             systemProperty 'forge.logging.markers', 'REGISTRIES'
             systemProperty 'forge.logging.console.level', 'debug'
+            jvmArguments.addAll('--enable-preview', '--enable-native-access=ALL-UNNAMED', '--enable-native-access=planetmapper')
         }
 
         client {
