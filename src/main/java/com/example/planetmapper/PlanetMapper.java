@@ -58,6 +58,7 @@ public class PlanetMapper {
             event.accept(ModItems.CREATOR_WAND.get());
             event.accept(ModItems.ADVANCED_CREATOR_WAND.get());
             event.accept(ModItems.EDITOR_WAND.get());
+            event.accept(ModItems.STRUCTURE_SELECTOR_WAND.get());
         }
     }
 
@@ -65,6 +66,7 @@ public class PlanetMapper {
     public void onServerStarting(RegisterCommandsEvent event) {
         LandingCommand.register(event.getDispatcher());
         com.example.planetmapper.command.PhysicsTestCommand.register(event.getDispatcher());
+        com.example.planetmapper.command.StructureCommand.register(event.getDispatcher());
         
         com.example.planetmapper.physics.PhysicsWorldManager.init();
     }

@@ -7,11 +7,22 @@ public class Config {
     public static final ModConfigSpec SPEC;
 
     public static final ModConfigSpec.IntValue WORLD_RADIUS;
+    public static final ModConfigSpec.IntValue PHYSICS_MAX_SELECTION_VOLUME;
+    public static final ModConfigSpec.IntValue PHYSICS_BLOCKS_PER_TICK;
 
     static {
         BUILDER.push("general");
         WORLD_RADIUS = BUILDER.comment("The radius of the world (axis center to edge). Coordinates beyond this wrap.")
                 .defineInRange("worldRadius", 15000, 100, 30000000);
+        BUILDER.pop();
+
+        BUILDER.push("physics");
+        PHYSICS_MAX_SELECTION_VOLUME = BUILDER
+                .comment("Maximum selection volume for physics structures (blocks).")
+                .defineInRange("maxSelectionVolume", 10000000, 1000, Integer.MAX_VALUE);
+        PHYSICS_BLOCKS_PER_TICK = BUILDER
+                .comment("How many blocks to process per tick when building a structure.")
+                .defineInRange("blocksPerTick", 2000, 100, 200000);
         BUILDER.pop();
         SPEC = BUILDER.build();
     }

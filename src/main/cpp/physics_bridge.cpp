@@ -242,6 +242,64 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
     return static_cast<jlong>(body->GetID().GetIndexAndSequenceNumber());
 }
 
+JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCreateStaticBody(JNIEnv* env, jclass clazz, jlong worldPtr, jfloatArray mins, jfloatArray maxs, jint boxCount) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw || !pw->mPhysicsSystem) return 0;
+
+    jfloat* minData = env->GetFloatArrayElements(mins, nullptr);
+    jfloat* maxData = env->GetFloatArrayElements(maxs, nullptr);
+    if (!minData || !maxData || boxCount <= 0) {
+        if (minData) env->ReleaseFloatArrayElements(mins, minData, 0);
+        if (maxData) env->ReleaseFloatArrayElements(maxs, maxData, 0);
+        return 0;
+    }
+
+    float minX = minData[0];
+    float minY = minData[1];
+    float minZ = minData[2];
+    float maxX = maxData[0];
+    float maxY = maxData[1];
+    float maxZ = maxData[2];
+
+    for (int i = 1; i < boxCount; ++i) {
+        int offset = i * 3;
+        minX = std::min(minX, minData[offset]);
+        minY = std::min(minY, minData[offset + 1]);
+        minZ = std::min(minZ, minData[offset + 2]);
+        maxX = std::max(maxX, maxData[offset]);
+        maxY = std::max(maxY, maxData[offset + 1]);
+        maxZ = std::max(maxZ, maxData[offset + 2]);
+    }
+
+    JPH::Vec3 bodyCenter((minX + maxX) * 0.5f, (minY + maxY) * 0.5f, (minZ + maxZ) * 0.5f);
+
+    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
+    JPH::StaticCompoundShapeSettings compoundSettings;
+    for (int i = 0; i < boxCount; ++i) {
+        int offset = i * 3;
+        JPH::Vec3 min(minData[offset], minData[offset+1], minData[offset+2]);
+        JPH::Vec3 max(maxData[offset], maxData[offset+1], maxData[offset+2]);
+
+        JPH::Vec3 center = (min + max) * 0.5f;
+        JPH::Vec3 halfExtent = (max - min) * 0.5f;
+        JPH::Vec3 localCenter = center - bodyCenter;
+
+        compoundSettings.AddShape(localCenter, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent));
+    }
+
+    env->ReleaseFloatArrayElements(mins, minData, 0);
+    env->ReleaseFloatArrayElements(maxs, maxData, 0);
+
+    JPH::ShapeSettings::ShapeResult result = compoundSettings.Create();
+    if (result.HasError()) return 0;
+
+    JPH::BodyCreationSettings settings(result.Get(), bodyCenter, JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::STATIC);
+    JPH::Body* body = bi.CreateBody(settings);
+    bi.AddBody(body->GetID(), JPH::EActivation::DontActivate);
+
+    return static_cast<jlong>(body->GetID().GetIndexAndSequenceNumber());
+}
+
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeGetBodyState(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId, jfloatArray outState) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
     if (!pw || !pw->mPhysicsSystem) return;
@@ -280,6 +338,18 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
 
     JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
     pw->mPhysicsSystem->GetBodyInterface().AddForce(id, JPH::Vec3(fx, fy, fz));
+}
+
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeRemoveBody(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw || !pw->mPhysicsSystem) return;
+
+    JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
+    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
+    if (bi.IsAdded(id)) {
+        bi.RemoveBody(id);
+    }
+    bi.DestroyBody(id);
 }
 
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCleanupPhysicsWorld(JNIEnv* env, jclass clazz, jlong worldPtr) {

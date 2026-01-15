@@ -24,8 +24,10 @@ public class NativePhysicsEngine {
     private static native void nativeSetGravity(long worldPtr, float x, float y, float z);
     private static native void nativeStepPhysics(long worldPtr, float deltaTime);
     private static native long nativeCreateRigidBody(long worldPtr, float[] mins, float[] maxs, int boxCount, float mass);
+    private static native long nativeCreateStaticBody(long worldPtr, float[] mins, float[] maxs, int boxCount);
     private static native void nativeGetBodyState(long worldPtr, long bodyId, float[] outState);
     private static native void nativeApplyForce(long worldPtr, long bodyId, float fx, float fy, float fz);
+    private static native void nativeRemoveBody(long worldPtr, long bodyId);
     private static native void nativeCleanupPhysicsWorld(long worldPtr);
 
     public NativePhysicsEngine() {
@@ -76,13 +78,13 @@ public class NativePhysicsEngine {
         }
     }
 
-    public void setGravity(Vector3f gravity) {
+    public synchronized void setGravity(Vector3f gravity) {
         if (worldPointer != 0) {
             nativeSetGravity(worldPointer, gravity.x(), gravity.y(), gravity.z());
         }
     }
 
-    public void step(float deltaTime) {
+    public synchronized void step(float deltaTime) {
         if (worldPointer != 0) {
             nativeStepPhysics(worldPointer, deltaTime);
         }
@@ -91,7 +93,7 @@ public class NativePhysicsEngine {
     /**
      * Creates a rigid body from a set of AABBs.
      */
-    public long createRigidBody(List<AABB> boxes, float mass) {
+    public synchronized long createRigidBody(List<AABB> boxes, float mass) {
         if (worldPointer == 0) return -1;
         
         int count = boxes.size();
@@ -114,22 +116,53 @@ public class NativePhysicsEngine {
     }
 
     /**
+     * Creates a static rigid body from a set of AABBs.
+     */
+    public synchronized long createStaticBody(List<AABB> boxes) {
+        if (worldPointer == 0) return -1;
+
+        int count = boxes.size();
+        float[] mins = new float[count * 3];
+        float[] maxs = new float[count * 3];
+
+        for (int i = 0; i < count; i++) {
+            AABB box = boxes.get(i);
+            int offset = i * 3;
+            mins[offset] = (float) box.minX;
+            mins[offset + 1] = (float) box.minY;
+            mins[offset + 2] = (float) box.minZ;
+
+            maxs[offset] = (float) box.maxX;
+            maxs[offset + 1] = (float) box.maxY;
+            maxs[offset + 2] = (float) box.maxZ;
+        }
+
+        return nativeCreateStaticBody(worldPointer, mins, maxs, count);
+    }
+
+    /**
      * Gets the body state into the provided array.
      * Array layout: [posX, posY, posZ, quatX, quatY, quatZ, quatW, velX, velY, velZ, angVelX, angVelY, angVelZ]
      */
-    public void getBodyState(long bodyId, float[] outState) {
+    public synchronized void getBodyState(long bodyId, float[] outState) {
         if (worldPointer != 0 && outState != null && outState.length >= 13) {
             nativeGetBodyState(worldPointer, bodyId, outState);
         }
     }
 
-    public void applyForce(long bodyId, Vector3f force) {
+    public synchronized void applyForce(long bodyId, Vector3f force) {
         if (worldPointer != 0) {
             nativeApplyForce(worldPointer, bodyId, force.x(), force.y(), force.z());
         }
     }
 
-    public void close() {
+    public synchronized void removeBody(long bodyId) {
+        if (worldPointer != 0) {
+            nativeRemoveBody(worldPointer, bodyId);
+        }
+    }
+
+    public synchronized void close() {
         if (worldPointer != 0) {
             nativeCleanupPhysicsWorld(worldPointer);
             worldPointer = 0;

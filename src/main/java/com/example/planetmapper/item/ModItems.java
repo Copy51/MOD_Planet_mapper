@@ -24,6 +24,10 @@ public class ModItems {
             "celestial_body_editor",
             () -> new CelestialBodyEditorItem(new Item.Properties().stacksTo(1)));
 
+    public static final DeferredHolder<Item, StructureSelectorWandItem> STRUCTURE_SELECTOR_WAND = ITEMS.register(
+            "structure_selector_wand",
+            () -> new StructureSelectorWandItem(new Item.Properties().stacksTo(1)));
+
     public static void register(IEventBus eventBus) {
         ITEMS.register(eventBus);
     }
