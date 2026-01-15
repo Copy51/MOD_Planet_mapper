@@ -13,6 +13,7 @@
 
 #include <vector>
 #include <unordered_map>
+#include <atomic>
 
 // Layers used for collision (simplified)
 namespace Layers {
@@ -101,32 +102,58 @@ public:
 
 class PhysicsWorld {
 public:
-    JPH::PhysicsSystem mPhysicsSystem;
-    JPH::TempAllocatorImpl mTempAllocator;
-    JPH::JobSystemThreadPool mJobSystem;
+    JPH::PhysicsSystem* mPhysicsSystem = nullptr;
+    JPH::TempAllocatorImpl* mTempAllocator = nullptr;
+    JPH::JobSystemThreadPool* mJobSystem = nullptr;
     
     // Layer interfaces
     BPLayerInterfaceImpl mBPLayerInterface;
     ObjectVsBroadPhaseLayerFilterImpl mObjectVsBroadPhaseLayerFilter;
     ObjectLayerPairFilterImpl mObjectLayerPairFilter;
 
-    PhysicsWorld() : 
-        mTempAllocator(10 * 1024 * 1024), // 10MB temp buffer
-        mJobSystem(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, std::thread::hardware_concurrency() - 1) 
-    {
-        JPH::RegisterDefaultAllocator();
-        JPH::Factory::sInstance = new JPH::Factory();
-        JPH::RegisterTypes();
+    PhysicsWorld() {
+        if (s_worldCount.fetch_add(1) == 0) {
+            InitJolt();
+        }
 
-        mPhysicsSystem.Init(65536, 1024, 1024, 1024, mBPLayerInterface, mObjectVsBroadPhaseLayerFilter, mObjectLayerPairFilter);
+        mTempAllocator = new JPH::TempAllocatorImpl(10 * 1024 * 1024); // 10MB temp buffer
+        uint32_t hw = std::thread::hardware_concurrency();
+        uint32_t workerThreads = (hw > 1) ? (hw - 1) : 1;
+        mJobSystem = new JPH::JobSystemThreadPool(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, workerThreads);
+        mPhysicsSystem = new JPH::PhysicsSystem();
+        mPhysicsSystem->Init(65536, 1024, 1024, 1024, mBPLayerInterface, mObjectVsBroadPhaseLayerFilter, mObjectLayerPairFilter);
     }
 
     ~PhysicsWorld() {
+        delete mPhysicsSystem;
+        mPhysicsSystem = nullptr;
+        delete mJobSystem;
+        mJobSystem = nullptr;
+        delete mTempAllocator;
+        mTempAllocator = nullptr;
+
+        if (s_worldCount.fetch_sub(1) == 1) {
+            ShutdownJolt();
+        }
+    }
+
+private:
+    static std::atomic<int> s_worldCount;
+
+    static void InitJolt() {
+        JPH::RegisterDefaultAllocator();
+        JPH::Factory::sInstance = new JPH::Factory();
+        JPH::RegisterTypes();
+    }
+
+    static void ShutdownJolt() {
         JPH::UnregisterTypes();
         delete JPH::Factory::sInstance;
         JPH::Factory::sInstance = nullptr;
     }
 };
+
+std::atomic<int> PhysicsWorld::s_worldCount{0};
 
 // JNI functions
 // Note: JNI function names follow the pattern: Java_packagename_ClassName_methodName
@@ -141,26 +168,26 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
 
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeSetGravity(JNIEnv* env, jclass clazz, jlong worldPtr, jfloat x, jfloat y, jfloat z) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
-    if (pw) {
-        pw->mPhysicsSystem.SetGravity(JPH::Vec3(x, y, z));
+    if (pw && pw->mPhysicsSystem) {
+        pw->mPhysicsSystem->SetGravity(JPH::Vec3(x, y, z));
     }
 }
 
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeStepPhysics(JNIEnv* env, jclass clazz, jlong worldPtr, jfloat deltaTime) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
-    if (pw) {
-        pw->mPhysicsSystem.Update(deltaTime, 1, &pw->mTempAllocator, &pw->mJobSystem);
+    if (pw && pw->mPhysicsSystem && pw->mTempAllocator && pw->mJobSystem) {
+        pw->mPhysicsSystem->Update(deltaTime, 1, pw->mTempAllocator, pw->mJobSystem);
     }
 }
 
 JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCreateRigidBody(JNIEnv* env, jclass clazz, jlong worldPtr, jfloatArray mins, jfloatArray maxs, jint boxCount, jfloat mass) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
-    if (!pw) return 0;
+    if (!pw || !pw->mPhysicsSystem) return 0;
 
     jfloat* minData = env->GetFloatArrayElements(mins, nullptr);
     jfloat* maxData = env->GetFloatArrayElements(maxs, nullptr);
 
-    JPH::BodyInterface& bi = pw->mPhysicsSystem.GetBodyInterface();
+    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
 
     JPH::StaticCompoundShapeSettings compoundSettings;
     for (int i = 0; i < boxCount; ++i) {
@@ -191,10 +218,10 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
 
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeGetBodyState(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId, jfloatArray outState) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
-    if (!pw) return;
+    if (!pw || !pw->mPhysicsSystem) return;
 
     JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
-    JPH::BodyInterface& bi = pw->mPhysicsSystem.GetBodyInterface();
+    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
 
     if (!bi.IsAdded(id)) return;
 
@@ -223,10 +250,10 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
 
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeApplyForce(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId, jfloat fx, jfloat fy, jfloat fz) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
-    if (!pw) return;
+    if (!pw || !pw->mPhysicsSystem) return;
 
     JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
-    pw->mPhysicsSystem.GetBodyInterface().AddForce(id, JPH::Vec3(fx, fy, fz));
+    pw->mPhysicsSystem->GetBodyInterface().AddForce(id, JPH::Vec3(fx, fy, fz));
 }
 
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCleanupPhysicsWorld(JNIEnv* env, jclass clazz, jlong worldPtr) {
