@@ -1,17 +1,22 @@
 package com.example.planetmapper.physics;
 
 import com.example.planetmapper.Config;
+import it.unimi.dsi.fastutil.longs.Long2LongMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
-import net.minecraft.world.level.chunk.ChunkPos;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.phys.AABB;
 
 import java.util.List;
@@ -26,35 +31,29 @@ import java.util.concurrent.Executors;
 public class WorldCollisionManager {
     private static final Map<ResourceKey<Level>, Long2LongOpenHashMap> CHUNK_BODIES = new HashMap<>();
     private static final Map<ResourceKey<Level>, Long2ObjectOpenHashMap<ChunkBuildTask>> TASKS = new HashMap<>();
-    private static final ExecutorService OPTIMIZER_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "Physics-Chunk-Optimizer");
-        t.setDaemon(true);
-        return t;
-    });
+    private static final Map<ResourceKey<Level>, Long2LongOpenHashMap> DIRTY_CHUNKS = new HashMap<>();
+    private static final Map<ResourceKey<Level>, LongOpenHashSet> PRIORITY_CHUNKS = new HashMap<>();
+    private static final Object EXECUTOR_LOCK = new Object();
+    private static ExecutorService optimizerExecutor = createExecutor();
+    private static volatile boolean acceptingTasks = true;
 
     private WorldCollisionManager() {
     }
 
     public static void onChunkLoad(ServerLevel level, ChunkAccess chunk) {
+        if (!acceptingTasks) {
+            return;
+        }
         if (!PhysicsWorldManager.isNativeAvailable()) {
             return;
         }
-        long key = chunk.getPos().toLong();
-        Long2LongOpenHashMap bodies = CHUNK_BODIES.computeIfAbsent(level.dimension(), d -> new Long2LongOpenHashMap());
-        if (bodies.containsKey(key)) {
-            return;
-        }
-
-        Long2ObjectOpenHashMap<ChunkBuildTask> tasks = TASKS.computeIfAbsent(level.dimension(), d -> new Long2ObjectOpenHashMap<>());
-        if (tasks.containsKey(key)) {
-            return;
-        }
-
-        ChunkBuildTask task = new ChunkBuildTask(chunk.getPos(), level.getMinBuildHeight(), level.getMaxBuildHeight() - 1);
-        tasks.put(key, task);
+        scheduleChunkBuild(level, chunk.getPos(), false, false);
     }
 
     public static void onChunkUnload(ServerLevel level, ChunkAccess chunk) {
+        if (!acceptingTasks) {
+            return;
+        }
         if (!PhysicsWorldManager.isNativeAvailable()) {
             return;
         }
@@ -68,6 +67,16 @@ public class WorldCollisionManager {
             }
         }
 
+        Long2LongOpenHashMap dirty = DIRTY_CHUNKS.get(level.dimension());
+        if (dirty != null) {
+            dirty.remove(key);
+        }
+
+        LongOpenHashSet priority = PRIORITY_CHUNKS.get(level.dimension());
+        if (priority != null) {
+            priority.remove(key);
+        }
+
         Long2LongOpenHashMap bodies = CHUNK_BODIES.get(level.dimension());
         if (bodies != null && bodies.containsKey(key)) {
             long bodyId = bodies.remove(key);
@@ -79,18 +88,47 @@ public class WorldCollisionManager {
     }
 
     public static void tick(ServerLevel level) {
+        if (!acceptingTasks) {
+            return;
+        }
         if (!PhysicsWorldManager.isNativeAvailable()) {
             return;
         }
-        Long2ObjectOpenHashMap<ChunkBuildTask> tasks = TASKS.get(level.dimension());
-        if (tasks == null || tasks.isEmpty()) {
+        Long2ObjectOpenHashMap<ChunkBuildTask> tasks = TASKS.computeIfAbsent(level.dimension(), d -> new Long2ObjectOpenHashMap<>());
+        processDirtyChunks(level, tasks);
+
+        int budget = Config.PHYSICS_COLLISION_BLOCKS_PER_TICK.get();
+        LongOpenHashSet priority = PRIORITY_CHUNKS.computeIfAbsent(level.dimension(), d -> new LongOpenHashSet());
+
+        if (!priority.isEmpty()) {
+            LongIterator priorityIterator = priority.iterator();
+            while (priorityIterator.hasNext() && budget > 0) {
+                long key = priorityIterator.nextLong();
+                ChunkBuildTask task = tasks.get(key);
+                if (task == null) {
+                    priorityIterator.remove();
+                    continue;
+                }
+                int used = task.scan(level, budget);
+                budget -= used;
+                if (task.isDone()) {
+                    tasks.remove(key);
+                    priorityIterator.remove();
+                }
+            }
+        }
+
+        if (budget <= 0) {
             return;
         }
 
-        int budget = Config.PHYSICS_BLOCKS_PER_TICK.get();
         ObjectIterator<Long2ObjectMap.Entry<ChunkBuildTask>> iterator = tasks.long2ObjectEntrySet().iterator();
         while (iterator.hasNext() && budget > 0) {
             Long2ObjectMap.Entry<ChunkBuildTask> entry = iterator.next();
+            long key = entry.getLongKey();
+            if (priority.contains(key)) {
+                continue;
+            }
             ChunkBuildTask task = entry.getValue();
             int used = task.scan(level, budget);
             budget -= used;
@@ -101,20 +139,79 @@ public class WorldCollisionManager {
     }
 
     public static void shutdown() {
-        OPTIMIZER_EXECUTOR.shutdown();
+        acceptingTasks = false;
+        ExecutorService executorToShutdown;
+        synchronized (EXECUTOR_LOCK) {
+            executorToShutdown = optimizerExecutor;
+            optimizerExecutor = null;
+        }
+        if (executorToShutdown != null) {
+            executorToShutdown.shutdownNow();
+        }
         TASKS.clear();
         CHUNK_BODIES.clear();
+        DIRTY_CHUNKS.clear();
+        PRIORITY_CHUNKS.clear();
+    }
+
+    public static void reset() {
+        acceptingTasks = true;
+        getExecutor();
+    }
+
+    public static void markChunkDirty(ServerLevel level, BlockPos pos) {
+        markChunkDirty(level, new ChunkPos(pos));
+    }
+
+    public static void markChunkDirty(ServerLevel level, ChunkPos chunkPos) {
+        if (!acceptingTasks || !PhysicsWorldManager.isNativeAvailable()) {
+            return;
+        }
+        long key = chunkPos.toLong();
+        long dueTime = level.getGameTime() + Config.PHYSICS_COLLISION_REBUILD_DELAY_TICKS.get();
+        Long2LongOpenHashMap dirty = DIRTY_CHUNKS.computeIfAbsent(level.dimension(), d -> new Long2LongOpenHashMap());
+        dirty.put(key, dueTime);
+    }
+
+    public static boolean isChunkColliderReady(ServerLevel level, ChunkPos chunkPos) {
+        Long2LongOpenHashMap bodies = CHUNK_BODIES.get(level.dimension());
+        return bodies != null && bodies.containsKey(chunkPos.toLong());
+    }
+
+    public static void ensureChunkCollider(ServerLevel level, ChunkPos chunkPos) {
+        scheduleChunkBuild(level, chunkPos, false, true);
+    }
+
+    private static ExecutorService getExecutor() {
+        synchronized (EXECUTOR_LOCK) {
+            if (optimizerExecutor == null || optimizerExecutor.isShutdown() || optimizerExecutor.isTerminated()) {
+                optimizerExecutor = createExecutor();
+            }
+            return optimizerExecutor;
+        }
+    }
+
+    private static ExecutorService createExecutor() {
+        return Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "Physics-Chunk-Optimizer");
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     private static void startOptimization(ServerLevel level, ChunkBuildTask task) {
         task.state = BuildState.OPTIMIZING;
+        if (!acceptingTasks) {
+            task.state = BuildState.FAILED;
+            return;
+        }
         CompletableFuture
                 .supplyAsync(() -> {
                     if (task.solidBlocks.isEmpty()) {
                         return List.<AABB>of();
                     }
                     return VoxelShapeOptimizer.optimize(task.solidBlocks);
-                }, OPTIMIZER_EXECUTOR)
+                }, getExecutor())
                 .thenAccept(boxes -> level.getServer().execute(() -> finishBuild(level, task, boxes)))
                 .exceptionally(ex -> {
                     task.state = BuildState.FAILED;
@@ -123,7 +220,12 @@ public class WorldCollisionManager {
     }
 
     private static void finishBuild(ServerLevel level, ChunkBuildTask task, List<AABB> boxes) {
-        if (task.cancelled || boxes.isEmpty()) {
+        if (!acceptingTasks) {
+            task.state = BuildState.FAILED;
+            task.solidBlocks.clear();
+            return;
+        }
+        if (task.cancelled) {
             task.state = BuildState.FAILED;
             task.solidBlocks.clear();
             return;
@@ -142,6 +244,22 @@ public class WorldCollisionManager {
             return;
         }
 
+        long key = task.chunkPos.toLong();
+        Long2LongOpenHashMap bodies = CHUNK_BODIES.computeIfAbsent(level.dimension(), d -> new Long2LongOpenHashMap());
+        long existingBody = bodies.containsKey(key) ? bodies.get(key) : 0L;
+
+        if (boxes.isEmpty()) {
+            if (existingBody != 0L) {
+                engine.removeBody(existingBody);
+                bodies.remove(key);
+            }
+            task.solidBlocks.clear();
+            task.state = BuildState.DONE;
+            AABB region = chunkRegion(level, task.chunkPos);
+            PhysicsColliderManager.activateBodiesInRegion(level, region);
+            return;
+        }
+
         long bodyId = engine.createStaticBody(boxes);
         if (bodyId <= 0) {
             task.state = BuildState.FAILED;
@@ -149,11 +267,90 @@ public class WorldCollisionManager {
             return;
         }
 
-        Long2LongOpenHashMap bodies = CHUNK_BODIES.computeIfAbsent(level.dimension(), d -> new Long2LongOpenHashMap());
-        bodies.put(task.chunkPos.toLong(), bodyId);
+        if (existingBody != 0L) {
+            engine.removeBody(existingBody);
+        }
+        bodies.put(key, bodyId);
 
         task.solidBlocks.clear();
         task.state = BuildState.DONE;
+        AABB region = chunkRegion(level, task.chunkPos);
+        PhysicsColliderManager.activateBodiesInRegion(level, region);
+    }
+
+    private static void scheduleChunkBuild(ServerLevel level, ChunkPos chunkPos, boolean force, boolean priority) {
+        if (!acceptingTasks || !PhysicsWorldManager.isNativeAvailable()) {
+            return;
+        }
+        long key = chunkPos.toLong();
+        Long2ObjectOpenHashMap<ChunkBuildTask> tasks = TASKS.computeIfAbsent(level.dimension(), d -> new Long2ObjectOpenHashMap<>());
+        if (tasks.containsKey(key)) {
+            if (priority) {
+                markPriority(level, key);
+            }
+            return;
+        }
+
+        if (!force) {
+            Long2LongOpenHashMap bodies = CHUNK_BODIES.get(level.dimension());
+            if (bodies != null && bodies.containsKey(key)) {
+                return;
+            }
+        }
+
+        ChunkBuildTask task = new ChunkBuildTask(chunkPos, level.getMinBuildHeight(), level.getMaxBuildHeight() - 1);
+        tasks.put(key, task);
+        if (priority) {
+            markPriority(level, key);
+        }
+    }
+
+    private static void markPriority(ServerLevel level, long key) {
+        LongOpenHashSet priority = PRIORITY_CHUNKS.computeIfAbsent(level.dimension(), d -> new LongOpenHashSet());
+        priority.add(key);
+    }
+
+    private static void processDirtyChunks(ServerLevel level, Long2ObjectOpenHashMap<ChunkBuildTask> tasks) {
+        Long2LongOpenHashMap dirty = DIRTY_CHUNKS.get(level.dimension());
+        if (dirty == null || dirty.isEmpty()) {
+            return;
+        }
+
+        long now = level.getGameTime();
+        ObjectIterator<Long2LongMap.Entry> iterator = dirty.long2LongEntrySet().iterator();
+        int scheduled = 0;
+        while (iterator.hasNext()) {
+            Long2LongMap.Entry entry = iterator.next();
+            long key = entry.getLongKey();
+            long due = entry.getLongValue();
+            if (due > now) {
+                continue;
+            }
+            if (tasks.containsKey(key)) {
+                markPriority(level, key);
+                continue;
+            }
+            ChunkPos chunkPos = new ChunkPos(key);
+            if (!level.hasChunk(chunkPos.x, chunkPos.z)) {
+                iterator.remove();
+                continue;
+            }
+            scheduleChunkBuild(level, chunkPos, true, true);
+            iterator.remove();
+            scheduled++;
+            if (scheduled >= 4) {
+                break;
+            }
+        }
+    }
+
+    private static AABB chunkRegion(ServerLevel level, ChunkPos chunkPos) {
+        int minY = level.getMinBuildHeight();
+        int maxY = level.getMaxBuildHeight();
+        return new AABB(
+                chunkPos.getMinBlockX(), minY, chunkPos.getMinBlockZ(),
+                chunkPos.getMaxBlockX() + 1, maxY, chunkPos.getMaxBlockZ() + 1
+        );
     }
 
     private enum BuildState {
@@ -171,6 +368,9 @@ public class WorldCollisionManager {
         private int currentX;
         private int currentY;
         private int currentZ;
+        private int currentSectionIndex = Integer.MIN_VALUE;
+        private boolean currentSectionEmpty = false;
+        private int nextSectionStartY = 0;
         private boolean cancelled = false;
         private BuildState state = BuildState.SCANNING;
 
@@ -181,6 +381,8 @@ public class WorldCollisionManager {
             this.currentX = chunkPos.getMinBlockX();
             this.currentZ = chunkPos.getMinBlockZ();
             this.currentY = minY;
+            this.currentSectionIndex = Integer.MIN_VALUE;
+            this.nextSectionStartY = minY;
         }
 
         private int scan(ServerLevel level, int budget) {
@@ -195,14 +397,33 @@ public class WorldCollisionManager {
                 return 0;
             }
 
+            ChunkAccess chunk = level.getChunk(chunkPos.x, chunkPos.z);
             BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
             int processed = 0;
             int maxX = chunkPos.getMaxBlockX();
             int maxZ = chunkPos.getMaxBlockZ();
 
             while (processed < budget && currentY <= maxY) {
+                int sectionIndex = chunk.getSectionIndex(currentY);
+                if (sectionIndex != currentSectionIndex) {
+                    currentSectionIndex = sectionIndex;
+                    LevelChunkSection section = chunk.getSection(sectionIndex);
+                    currentSectionEmpty = section.hasOnlyAir();
+                    int sectionY = chunk.getMinSection() + sectionIndex;
+                    nextSectionStartY = SectionPos.sectionToBlockCoord(sectionY + 1);
+                }
+
+                if (currentSectionEmpty) {
+                    int nextY = Math.max(nextSectionStartY, currentY + 1);
+                    currentY = nextY;
+                    currentX = chunkPos.getMinBlockX();
+                    currentZ = chunkPos.getMinBlockZ();
+                    currentSectionIndex = Integer.MIN_VALUE;
+                    continue;
+                }
+
                 cursor.set(currentX, currentY, currentZ);
-                BlockState state = level.getBlockState(cursor);
+                BlockState state = chunk.getBlockState(cursor);
                 if (!state.isAir() && !state.getCollisionShape(level, cursor).isEmpty()) {
                     solidBlocks.add(cursor.immutable());
                 }

@@ -340,6 +340,17 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
     pw->mPhysicsSystem->GetBodyInterface().AddForce(id, JPH::Vec3(fx, fy, fz));
 }
 
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeActivateBody(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw || !pw->mPhysicsSystem) return;
+
+    JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
+    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
+    if (bi.IsAdded(id)) {
+        bi.ActivateBody(id);
+    }
+}
+
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeRemoveBody(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
     if (!pw || !pw->mPhysicsSystem) return;

@@ -28,6 +28,7 @@ public class PhysicsBodyEntityAdapter implements PhysicsBodyEntity {
     public void detach() {
         alive = false;
         PhysicsWorldManager.unregisterEntity(this);
+        PhysicsColliderManager.unregisterDynamicBody(bodyId);
     }
 
     @Override

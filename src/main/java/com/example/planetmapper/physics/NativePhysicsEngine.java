@@ -27,6 +27,7 @@ public class NativePhysicsEngine {
     private static native long nativeCreateStaticBody(long worldPtr, float[] mins, float[] maxs, int boxCount);
     private static native void nativeGetBodyState(long worldPtr, long bodyId, float[] outState);
     private static native void nativeApplyForce(long worldPtr, long bodyId, float fx, float fy, float fz);
+    private static native void nativeActivateBody(long worldPtr, long bodyId);
     private static native void nativeRemoveBody(long worldPtr, long bodyId);
     private static native void nativeCleanupPhysicsWorld(long worldPtr);
 
@@ -153,6 +154,12 @@ public class NativePhysicsEngine {
     public synchronized void applyForce(long bodyId, Vector3f force) {
         if (worldPointer != 0) {
             nativeApplyForce(worldPointer, bodyId, force.x(), force.y(), force.z());
+        }
+    }
+
+    public synchronized void activateBody(long bodyId) {
+        if (worldPointer != 0) {
+            nativeActivateBody(worldPointer, bodyId);
         }
     }
 

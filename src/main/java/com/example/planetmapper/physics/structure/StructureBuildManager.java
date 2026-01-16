@@ -3,8 +3,11 @@ package com.example.planetmapper.physics.structure;
 import com.example.planetmapper.Config;
 import com.example.planetmapper.physics.NativePhysicsEngine;
 import com.example.planetmapper.physics.PhysicsBodyEntityAdapter;
+import com.example.planetmapper.physics.PhysicsColliderManager;
 import com.example.planetmapper.physics.PhysicsWorldManager;
+import com.example.planetmapper.physics.WorldCollisionManager;
 import com.example.planetmapper.physics.VoxelShapeOptimizer;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
@@ -14,6 +17,7 @@ import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -34,16 +38,18 @@ import java.util.concurrent.Executors;
 public class StructureBuildManager {
     private static final Map<ResourceKey<Level>, List<StructureBuildTask>> TASKS = new HashMap<>();
     private static final Map<UUID, StructureBuildTask> TASKS_BY_OWNER = new HashMap<>();
-    private static final ExecutorService OPTIMIZER_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "Physics-Structure-Optimizer");
-        t.setDaemon(true);
-        return t;
-    });
+    private static final Object EXECUTOR_LOCK = new Object();
+    private static ExecutorService optimizerExecutor = createExecutor();
+    private static volatile boolean acceptingTasks = true;
 
     private StructureBuildManager() {
     }
 
     public static synchronized boolean enqueue(ServerPlayer player, ServerLevel level, StructureSelection selection) {
+        if (!acceptingTasks) {
+            player.sendSystemMessage(Component.literal("Physics system is shutting down."));
+            return false;
+        }
         if (!PhysicsWorldManager.isNativeAvailable()) {
             player.sendSystemMessage(Component.literal("Native physics engine is not available."));
             return false;
@@ -76,6 +82,9 @@ public class StructureBuildManager {
     }
 
     public static synchronized void tick(ServerLevel level) {
+        if (!acceptingTasks) {
+            return;
+        }
         List<StructureBuildTask> tasks = TASKS.get(level.dimension());
         if (tasks == null || tasks.isEmpty()) {
             return;
@@ -94,13 +103,47 @@ public class StructureBuildManager {
     }
 
     public static synchronized void shutdown() {
-        OPTIMIZER_EXECUTOR.shutdown();
+        acceptingTasks = false;
+        ExecutorService executorToShutdown;
+        synchronized (EXECUTOR_LOCK) {
+            executorToShutdown = optimizerExecutor;
+            optimizerExecutor = null;
+        }
+        if (executorToShutdown != null) {
+            executorToShutdown.shutdownNow();
+        }
         TASKS.clear();
         TASKS_BY_OWNER.clear();
     }
 
+    public static synchronized void reset() {
+        acceptingTasks = true;
+        getExecutor();
+    }
+
+    private static ExecutorService getExecutor() {
+        synchronized (EXECUTOR_LOCK) {
+            if (optimizerExecutor == null || optimizerExecutor.isShutdown() || optimizerExecutor.isTerminated()) {
+                optimizerExecutor = createExecutor();
+            }
+            return optimizerExecutor;
+        }
+    }
+
+    private static ExecutorService createExecutor() {
+        return Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "Physics-Structure-Optimizer");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
     private static void startOptimization(ServerLevel level, StructureBuildTask task) {
         task.state = BuildState.OPTIMIZING;
+        if (!acceptingTasks) {
+            task.state = BuildState.FAILED;
+            return;
+        }
         task.sendToOwner(level, "Optimizing " + task.solidBlockCount + " blocks...");
 
         CompletableFuture
@@ -109,7 +152,7 @@ public class StructureBuildManager {
                         return List.<AABB>of();
                     }
                     return VoxelShapeOptimizer.optimize(task.solidBlocks);
-                }, OPTIMIZER_EXECUTOR)
+                }, getExecutor())
                 .thenAccept(boxes -> level.getServer().execute(() -> finishBuild(level, task, boxes)))
                 .exceptionally(ex -> {
                     level.getServer().execute(() -> failBuild(level, task, "Optimization failed: " + ex.getMessage()));
@@ -118,6 +161,11 @@ public class StructureBuildManager {
     }
 
     private static void finishBuild(ServerLevel level, StructureBuildTask task, List<AABB> boxes) {
+        if (!acceptingTasks) {
+            task.state = BuildState.FAILED;
+            task.solidBlocks.clear();
+            return;
+        }
         if (boxes.isEmpty()) {
             failBuild(level, task, "Selection contains no collidable blocks.");
             return;
@@ -135,6 +183,8 @@ public class StructureBuildManager {
             failBuild(level, task, "Failed to create physics body.");
             return;
         }
+
+        PhysicsColliderManager.registerDynamicBody(level.dimension(), bodyId, boxes);
 
         BlockPos min = task.min;
         BlockPos max = task.max;
@@ -175,6 +225,7 @@ public class StructureBuildManager {
         private final BlockPos max;
         private final long totalVolume;
         private final Set<BlockPos> solidBlocks = new HashSet<>();
+        private final LongOpenHashSet dirtyChunks = new LongOpenHashSet();
         private long processedVolume;
         private long solidBlockCount;
         private int currentX;
@@ -221,6 +272,11 @@ public class StructureBuildManager {
                     solidBlockCount++;
                     level.setBlock(cursor, Blocks.AIR.defaultBlockState(),
                             Block.UPDATE_CLIENTS | Block.UPDATE_SUPPRESS_DROPS);
+
+                    long chunkKey = ChunkPos.asLong(cursor.getX() >> 4, cursor.getZ() >> 4);
+                    if (dirtyChunks.add(chunkKey)) {
+                        WorldCollisionManager.markChunkDirty(level, new ChunkPos(chunkKey));
+                    }
                 }
 
                 processedThisTick++;

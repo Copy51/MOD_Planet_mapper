@@ -2,15 +2,19 @@ package com.example.planetmapper.command;
 
 import com.example.planetmapper.physics.NativePhysicsEngine;
 import com.example.planetmapper.physics.PhysicsBodyEntityAdapter;
+import com.example.planetmapper.physics.PhysicsColliderManager;
 import com.example.planetmapper.physics.PhysicsWorldManager;
+import com.example.planetmapper.physics.WorldCollisionManager;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
+import net.minecraft.core.BlockPos;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -36,6 +40,13 @@ public class PhysicsTestCommand {
         try {
             NativePhysicsEngine engine = PhysicsWorldManager.getEngine();
             Vec3 pos = source.getPosition();
+
+            ChunkPos chunkPos = new ChunkPos(BlockPos.containing(pos));
+            WorldCollisionManager.ensureChunkCollider(source.getLevel(), chunkPos);
+            if (!WorldCollisionManager.isChunkColliderReady(source.getLevel(), chunkPos)) {
+                source.sendFailure(Component.literal("Chunk collision not ready yet. Wait a few seconds and try again."));
+                return 0;
+            }
             
             // Create a simple box shape 1x1x1 at player position
             AABB box = new AABB(
@@ -48,6 +59,8 @@ public class PhysicsTestCommand {
                 source.sendFailure(Component.literal("Failed to create physics body."));
                 return 0;
             }
+
+            PhysicsColliderManager.registerDynamicBody(source.getLevel().dimension(), bodyId, Collections.singletonList(box));
 
             Display.ItemDisplay display = EntityType.ITEM_DISPLAY.create(source.getLevel());
             if (display == null) {

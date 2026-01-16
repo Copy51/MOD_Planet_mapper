@@ -9,6 +9,8 @@ public class Config {
     public static final ModConfigSpec.IntValue WORLD_RADIUS;
     public static final ModConfigSpec.IntValue PHYSICS_MAX_SELECTION_VOLUME;
     public static final ModConfigSpec.IntValue PHYSICS_BLOCKS_PER_TICK;
+    public static final ModConfigSpec.IntValue PHYSICS_COLLISION_BLOCKS_PER_TICK;
+    public static final ModConfigSpec.IntValue PHYSICS_COLLISION_REBUILD_DELAY_TICKS;
 
     static {
         BUILDER.push("general");
@@ -23,6 +25,12 @@ public class Config {
         PHYSICS_BLOCKS_PER_TICK = BUILDER
                 .comment("How many blocks to process per tick when building a structure.")
                 .defineInRange("blocksPerTick", 2000, 100, 200000);
+        PHYSICS_COLLISION_BLOCKS_PER_TICK = BUILDER
+                .comment("How many blocks to scan per tick for chunk collision.")
+                .defineInRange("collisionBlocksPerTick", 8000, 500, 500000);
+        PHYSICS_COLLISION_REBUILD_DELAY_TICKS = BUILDER
+                .comment("Delay (ticks) after block changes before rebuilding chunk collision.")
+                .defineInRange("collisionRebuildDelayTicks", 20, 0, 1200);
         BUILDER.pop();
         SPEC = BUILDER.build();
     }
