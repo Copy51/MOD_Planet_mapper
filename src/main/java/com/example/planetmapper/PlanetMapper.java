@@ -34,6 +34,8 @@ public class PlanetMapper {
     public PlanetMapper(IEventBus modEventBus, ModContainer modContainer) {
         // Register Items
         ModItems.register(modEventBus);
+        // Register Entities
+        com.example.planetmapper.entity.ModEntities.register(modEventBus);
 
         // Register the commonSetup method for networking
         // PacketHandler.register is static @SubscribeEvent, so it auto-registers if

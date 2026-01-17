@@ -36,6 +36,32 @@ public final class PhysicsColliderManager {
             DYNAMIC_BODIES.put(bodyId, collider);
         }
     }
+    
+    public static void registerAndSyncBody(ServerLevel level, long bodyId, List<AABB> worldBoxes) {
+        registerDynamicBody(level.dimension(), bodyId, worldBoxes);
+        net.neoforged.neoforge.network.PacketDistributor.sendToPlayersInDimension(
+                level,
+                new com.example.planetmapper.network.DynamicColliderSyncPacket(level.dimension().location(), bodyId, worldBoxes)
+        );
+    }
+    
+
+    public static void unregisterAndSyncBody(ServerLevel level, long bodyId) {
+        unregisterDynamicBody(bodyId);
+        net.neoforged.neoforge.network.PacketDistributor.sendToPlayersInDimension(
+                level,
+                new com.example.planetmapper.network.DynamicColliderRemovePacket(bodyId)
+        );
+    }
+    
+    public static void updateBodyTransform(long bodyId, float px, float py, float pz, Quaternionf rotation) {
+        synchronized (DYNAMIC_BODIES) {
+            DynamicCollider collider = DYNAMIC_BODIES.get(bodyId);
+            if (collider != null) {
+                collider.updateTransform(px, py, pz, rotation);
+            }
+        }
+    }
 
     public static void unregisterDynamicBody(long bodyId) {
         synchronized (DYNAMIC_BODIES) {
@@ -47,20 +73,23 @@ public final class PhysicsColliderManager {
         if (!(entity instanceof Player)) {
             return Collections.emptyList();
         }
-        if (entity.level().isClientSide()) {
+        // Removed client-side check to allow client prediction
+        
+        if (!PhysicsWorldManager.isNativeAvailable() && !entity.level().isClientSide()) {
             return Collections.emptyList();
         }
-        if (!PhysicsWorldManager.isNativeAvailable()) {
-            return Collections.emptyList();
+        
+        // On server, we update from native. On client, we rely on packets.
+        if (entity.level() instanceof ServerLevel level) {
+            ensureUpdated(level);
         }
-        if (!(entity.level() instanceof ServerLevel level)) {
-            return Collections.emptyList();
-        }
-
-        ensureUpdated(level);
 
         AABB query = entity.getBoundingBox().expandTowards(movement);
-        ResourceKey<Level> dimension = level.dimension();
+        
+        ResourceKey<Level> dimension = entity.level().dimension();
+        if (entity.level() instanceof ServerLevel level) {
+             dimension = level.dimension();
+        }
         List<VoxelShape> shapes = null;
 
         synchronized (DYNAMIC_BODIES) {
@@ -188,12 +217,14 @@ public final class PhysicsColliderManager {
 
         private void update(NativePhysicsEngine engine) {
             engine.getBodyState(bodyId, stateBuffer);
-
             float px = stateBuffer[0];
             float py = stateBuffer[1];
             float pz = stateBuffer[2];
             Quaternionf rotation = new Quaternionf(stateBuffer[3], stateBuffer[4], stateBuffer[5], stateBuffer[6]);
+            updateTransform(px, py, pz, rotation);
+        }
 
+        public void updateTransform(float px, float py, float pz, Quaternionf rotation) {
             Matrix3f rot = new Matrix3f().set(rotation);
             float m00 = Math.abs(rot.m00());
             float m01 = Math.abs(rot.m01());

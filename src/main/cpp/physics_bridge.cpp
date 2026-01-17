@@ -10,6 +10,9 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/Shape/Shape.h>
 
 #include <vector>
 #include <unordered_map>
@@ -224,7 +227,8 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
         JPH::Vec3 halfExtent = (max - min) * 0.5f;
         JPH::Vec3 localCenter = center - bodyCenter;
 
-        compoundSettings.AddShape(localCenter, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent));
+
+        compoundSettings.AddShape(localCenter, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent), i);
     }
 
     env->ReleaseFloatArrayElements(mins, minData, 0);
@@ -284,7 +288,8 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
         JPH::Vec3 halfExtent = (max - min) * 0.5f;
         JPH::Vec3 localCenter = center - bodyCenter;
 
-        compoundSettings.AddShape(localCenter, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent));
+
+        compoundSettings.AddShape(localCenter, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent), i);
     }
 
     env->ReleaseFloatArrayElements(mins, minData, 0);
@@ -362,6 +367,160 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
     }
     bi.DestroyBody(id);
 }
+
+
+JNIEXPORT jboolean JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeRaycast(JNIEnv* env, jclass clazz, jlong worldPtr, 
+    jfloat originX, jfloat originY, jfloat originZ, 
+    jfloat dirX, jfloat dirY, jfloat dirZ, 
+    jfloat maxDistance, jfloatArray hitInfo) {
+    
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw || !pw->mPhysicsSystem) return false;
+
+    JPH::Vec3 origin(originX, originY, originZ);
+    JPH::Vec3 direction(dirX, dirY, dirZ);
+    // Normalize direction and scale by maxDistance if direction is just a vector
+    // Assumes input direction is normalized? Let's treat (dirX, dirY, dirZ) as the full ray vector?
+    // Usually RayCast takes Origin and Direction (where Direction length is distance).
+    // Let's assume input dir is normalized and we scale by maxDistance, OR input dir is the full vector.
+    // Standard convention: Origin + Direction.
+    
+    JPH::RRayCast ray{ origin, direction * maxDistance };
+    JPH::RayCastResult result;
+
+    // Cast against everything
+    if (pw->mPhysicsSystem->GetNarrowPhaseQuery().CastRay(ray, result)) {
+        if (hitInfo != nullptr) {
+            jfloat info[6];
+            JPH::BodyID bodyID = result.mBodyID;
+            info[0] = static_cast<jfloat>(bodyID.GetIndexAndSequenceNumber());
+            
+            // Get the sub shape ID to know which specific block was hit in the compound shape
+            JPH::SubShapeID subShapeID = result.mSubShapeID2;
+            // We need to map this SubShapeID to an index.
+            // For a StaticCompoundShape, we can use the body's shape to get the sub shape user data or index.
+            // However, directly returning the raw SubShapeID value might be opaque. 
+            // But Jolt's SubShapeID is a bitfield.
+            // We need to drill down.
+            
+            JPH::BodyLockRead lock(pw->mPhysicsSystem->GetBodyLockInterface(), bodyID);
+            if (lock.Succeeded()) {
+                const JPH::Body& body = lock.GetBody();
+                const JPH::Shape* shape = body.GetShape();
+                
+                // Convert SubShapeID to leaf index if possible
+                // This creates a "SubShapeIDCreator" to walk down? No.
+                // shape->GetSubShapeUserData(subShapeID) is often used if we utilized UserData.
+                // We didn't set UserData in CreateRigidBody.
+                // BUT: Simple Compound Shapes usually index sequentially.
+                
+                // Let's try to get the Leaf Shape Key or similar.
+                // Actually, for StaticCompoundShape, the subShapeID can be used to get the child index.
+                // We might need to handle this in Java or ensure we pass the index.
+                
+                // For now, let's just return the value and refine if needed.
+                // Wait, without UserData, identifying the block index is hard if the tree is optimized.
+                // FIX: We should have set UserData in createRigidBody.
+                
+
+                // Get the sub shape ID to know which specific block was hit
+                JPH::uint32 userData = shape->GetSubShapeUserData(result.mSubShapeID2);
+                info[1] = static_cast<jfloat>(userData);
+
+                // Calculating hit position
+                JPH::Vec3 hitPos = ray.GetPointOnRay(result.mFraction);
+                info[2] = hitPos.GetX();
+                info[3] = hitPos.GetY();
+                info[4] = hitPos.GetZ();
+                
+                // Normal
+                JPH::Vec3 normal = body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, hitPos);
+                info[5] = 0.0f; // Could pack normal here if needed, or separate.
+            }
+            
+            env->SetFloatArrayRegion(hitInfo, 0, 6, info);
+        }
+        return true;
+        }
+    return false;
+}
+
+JNIEXPORT jint JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeSyncAllBodies(JNIEnv* env, jclass clazz, jlong worldPtr, jobject byteBuffer, jint maxBodies) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw || !pw->mPhysicsSystem) return 0;
+
+    void* rawBuf = env->GetDirectBufferAddress(byteBuffer);
+    if (!rawBuf) return 0;
+    
+    // Stride: ID (8) + Pos(12) + Rot(16) + LinVel(12) + AngVel(12) = 60 bytes
+    // Using simple float layout for easier Java parsing:
+    // long id, float x,y,z, qx,qy,qz,qw, vx,vy,vz, avx,avy,avz
+    // In ByteBuffer, we write raw bytes. 
+    // Let's assume the Java side expects a specific struct layout.
+    // Let's write: ID (8 bytes), then 13 floats (52 bytes). Total 60 bytes.
+    
+    char* buf = static_cast<char*>(rawBuf);
+    int count = 0;
+    
+    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
+    // iterate active bodies? Or all bodies?
+    // Usually we only care about active (moving) bodies for sync.
+    JPH::BodyIDVector bodies;
+    pw->mPhysicsSystem->GetActiveBodies(JPH::EBodyType::RigidBody, bodies);
+    
+    for (const JPH::BodyID& id : bodies) {
+        if (count >= maxBodies) break;
+        
+        // Write ID
+        jlong bodyIdVal = static_cast<jlong>(id.GetIndexAndSequenceNumber());
+        *reinterpret_cast<jlong*>(buf) = bodyIdVal; // Endianness? typical x64 LE is fine for Java ByteBuffer.order(nativeOrder)
+        buf += 8;
+        
+        // Lock body (lighter lock if possible, or assume single threaded sync)
+        // Jolt allows reading active bodies without lock if we accept slight tearing, 
+        // but BodyLockRead is safer.
+        JPH::BodyLockRead lock(pw->mPhysicsSystem->GetBodyLockInterface(), id);
+        if (lock.Succeeded()) {
+             const JPH::Body& body = lock.GetBody();
+             JPH::RVec3 pos = body.GetPosition();
+             JPH::Quat rot = body.GetRotation();
+             JPH::Vec3 vel = body.GetLinearVelocity();
+             JPH::Vec3 angVel = body.GetAngularVelocity();
+             
+             // Positions are double (RVec3) if JPH_DOUBLE_PRECISION is on. 
+             // Provided code uses JPH::Vec3 for gravity so likely single precision or we cast.
+             // NativeCreateRigidBody uses floats.
+             // We cast to float.
+             
+             float* fbuf = reinterpret_cast<float*>(buf);
+             fbuf[0] = static_cast<float>(pos.GetX());
+             fbuf[1] = static_cast<float>(pos.GetY());
+             fbuf[2] = static_cast<float>(pos.GetZ());
+             
+             fbuf[3] = rot.GetX();
+             fbuf[4] = rot.GetY();
+             fbuf[5] = rot.GetZ();
+             fbuf[6] = rot.GetW();
+             
+             fbuf[7] = vel.GetX();
+             fbuf[8] = vel.GetY();
+             fbuf[9] = vel.GetZ();
+             
+             fbuf[10] = angVel.GetX();
+             fbuf[11] = angVel.GetY();
+             fbuf[12] = angVel.GetZ();
+             
+             buf += 52; // 13 * 4
+             count++;
+        } else {
+             // Failed lock, rollback buf?
+             buf -= 8; 
+        }
+    }
+    
+    return count;
+}
+
 
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCleanupPhysicsWorld(JNIEnv* env, jclass clazz, jlong worldPtr) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);

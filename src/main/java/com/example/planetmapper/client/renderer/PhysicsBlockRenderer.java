@@ -1,0 +1,47 @@
+package com.example.planetmapper.client.renderer;
+
+import com.example.planetmapper.entity.PhysicsBlockEntity;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+
+public class PhysicsBlockRenderer extends EntityRenderer<PhysicsBlockEntity> {
+
+    public PhysicsBlockRenderer(EntityRendererProvider.Context context) {
+        super(context);
+    }
+
+    @Override
+    public void render(PhysicsBlockEntity entity, float entityYaw, float partialTick, PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
+        super.render(entity, entityYaw, partialTick, poseStack, buffer, packedLight);
+
+        poseStack.pushPose();
+
+        // Apply rotation from physics engine (Quaternion)
+        // Interpolate using partialTick for smooth 60Hz+ rendering
+        poseStack.mulPose(entity.getPhysicsRotation(partialTick));
+
+        // Center the block rendering (blocks are 0..1, physics bodies are centered)
+        poseStack.translate(-0.5, -0.5, -0.5);
+
+        // Render a generic stone block for now. 
+        // In the future, PhysicsBlockEntity should store the BlockState it represents.
+        BlockState renderState = Blocks.STONE.defaultBlockState();
+        
+        var blockRenderer = net.minecraft.client.Minecraft.getInstance().getBlockRenderer();
+        blockRenderer.renderSingleBlock(renderState, poseStack, buffer, packedLight, 
+                net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY);
+
+        poseStack.popPose();
+    }
+
+    @Override
+    public ResourceLocation getTextureLocation(PhysicsBlockEntity entity) {
+        return TextureAtlas.LOCATION_BLOCKS;
+    }
+}

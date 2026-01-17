@@ -32,5 +32,20 @@ public class PacketHandler {
                 CelestialBodySyncPacket.TYPE,
                 CelestialBodySyncPacket.STREAM_CODEC,
                 CelestialBodySyncPacket::handle);
+
+        registrar.playToClient(
+                DynamicColliderSyncPacket.TYPE,
+                DynamicColliderSyncPacket.STREAM_CODEC,
+                DynamicColliderSyncPacket::handle);
+
+        registrar.playToClient(
+                DynamicColliderRemovePacket.TYPE,
+                DynamicColliderRemovePacket.STREAM_CODEC,
+                DynamicColliderRemovePacket::handle);
+
+        registrar.playToClient(
+                PhysicsEntitySyncPacket.TYPE,
+                PhysicsEntitySyncPacket.STREAM_CODEC,
+                PhysicsEntitySyncPacket::handle);
     }
 }

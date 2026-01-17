@@ -60,20 +60,19 @@ public class PhysicsTestCommand {
                 return 0;
             }
 
-            PhysicsColliderManager.registerDynamicBody(source.getLevel().dimension(), bodyId, Collections.singletonList(box));
+            PhysicsColliderManager.registerAndSyncBody(source.getLevel(), bodyId, Collections.singletonList(box));
 
-            Display.ItemDisplay display = EntityType.ITEM_DISPLAY.create(source.getLevel());
-            if (display == null) {
-                source.sendFailure(Component.literal("Failed to create display entity."));
+            com.example.planetmapper.entity.PhysicsBlockEntity physicsEntity = com.example.planetmapper.entity.ModEntities.PHYSICS_BLOCK.get().create(source.getLevel());
+            if (physicsEntity == null) {
+                source.sendFailure(Component.literal("Failed to create physics block entity."));
                 return 0;
             }
 
-            display.setPos(pos.x, pos.y, pos.z);
-            display.getSlot(0).set(new ItemStack(Blocks.STONE));
-            source.getLevel().addFreshEntity(display);
-
-            PhysicsBodyEntityAdapter adapter = new PhysicsBodyEntityAdapter(display, bodyId);
-            PhysicsWorldManager.registerEntity(adapter);
+            // Spawn at feet position (center - 0.5) to match physics offset
+            physicsEntity.setPos(pos.x, pos.y - 0.5, pos.z);
+            physicsEntity.setBodyId(bodyId);
+            source.getLevel().addFreshEntity(physicsEntity);
+            PhysicsWorldManager.registerEntity(physicsEntity);
 
             source.sendSuccess(() -> Component.literal("Physics block spawned! Body ID: " + bodyId), true);
             return 1;

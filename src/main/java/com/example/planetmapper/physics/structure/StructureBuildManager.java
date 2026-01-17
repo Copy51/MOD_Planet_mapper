@@ -184,7 +184,7 @@ public class StructureBuildManager {
             return;
         }
 
-        PhysicsColliderManager.registerDynamicBody(level.dimension(), bodyId, boxes);
+        PhysicsColliderManager.registerAndSyncBody(level, bodyId, boxes);
 
         BlockPos min = task.min;
         BlockPos max = task.max;
@@ -192,12 +192,13 @@ public class StructureBuildManager {
         double centerY = (min.getY() + max.getY() + 1) / 2.0;
         double centerZ = (min.getZ() + max.getZ() + 1) / 2.0;
 
-        Display.ItemDisplay display = EntityType.ITEM_DISPLAY.create(level);
-        if (display != null) {
-            display.setPos(centerX, centerY, centerZ);
-            display.getSlot(0).set(new ItemStack(Blocks.STONE));
-            level.addFreshEntity(display);
-            PhysicsWorldManager.registerEntity(new PhysicsBodyEntityAdapter(display, bodyId));
+        com.example.planetmapper.entity.PhysicsBlockEntity physicsEntity = com.example.planetmapper.entity.ModEntities.PHYSICS_BLOCK.get().create(level);
+        if (physicsEntity != null) {
+            // Spawn at feet position (center - 0.5) to match physics offset
+            physicsEntity.setPos(centerX, centerY - 0.5, centerZ);
+            physicsEntity.setBodyId(bodyId);
+            level.addFreshEntity(physicsEntity);
+            PhysicsWorldManager.registerEntity(physicsEntity);
         }
 
         task.solidBlocks.clear();

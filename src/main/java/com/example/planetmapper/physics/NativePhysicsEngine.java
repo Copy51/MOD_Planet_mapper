@@ -169,6 +169,58 @@ public class NativePhysicsEngine {
         }
     }
 
+    private static native boolean nativeRaycast(long worldPtr, float ox, float oy, float oz, float dx, float dy, float dz, float maxDist, float[] hitInfo);
+
+    public static class RaycastResult {
+        public boolean hit;
+        public long bodyId;
+        public int subShapeIndex;
+        public Vector3f position;
+        public Vector3f normal;
+        
+        public RaycastResult() {
+             this.hit = false;
+             this.position = new Vector3f();
+             this.normal = new Vector3f();
+        }
+    }
+
+    public synchronized RaycastResult raycast(Vector3f origin, Vector3f direction, float maxDistance) {
+        RaycastResult result = new RaycastResult();
+        if (worldPointer == 0) return result;
+
+        float[] hitInfo = new float[6];
+        boolean hit = nativeRaycast(worldPointer, origin.x(), origin.y(), origin.z(), direction.x(), direction.y(), direction.z(), maxDistance, hitInfo);
+        
+        if (hit) {
+            result.hit = true;
+            result.bodyId = (long) hitInfo[0];
+            result.subShapeIndex = (int) hitInfo[1];
+            result.position.set(hitInfo[2], hitInfo[3], hitInfo[4]);
+            // Normal not fully implemented in native yet, but structure is there
+            result.normal.set(0, 1, 0); 
+        }
+        return result;
+    }
+
+    private static native int nativeSyncAllBodies(long worldPtr, java.nio.ByteBuffer buffer, int maxBodies);
+
+    /**
+     * Updates all active bodies from the native physics world into the provided ByteBuffer.
+     * buffer must be a DirectByteBuffer.
+     * The layout of the buffer is:
+     * [Long ID (8)] [Float PosX (4)] [Float PosY (4)] [Float PosZ (4)]
+     * [Float RotX (4)] [Float RotY (4)] [Float RotZ (4)] [Float RotW (4)]
+     * [Float VelX (4)] [Float VelY (4)] [Float VelZ (4)]
+     * [Float AngVelX (4)] [Float AngVelY (4)] [Float AngVelZ (4)]
+     * TotalStride: 60 bytes.
+     * @return Number of bodies synced.
+     */
+    public synchronized int syncAllBodies(java.nio.ByteBuffer buffer, int maxBodies) {
+        if (worldPointer == 0) return 0;
+        return nativeSyncAllBodies(worldPointer, buffer, maxBodies);
+    }
+
     public synchronized void close() {
         if (worldPointer != 0) {
             nativeCleanupPhysicsWorld(worldPointer);
