@@ -356,6 +356,42 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
     }
 }
 
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeUpdateBodyShape(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId, jfloatArray mins, jfloatArray maxs, jint boxCount) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw || !pw->mPhysicsSystem) return;
+
+    jfloat* minData = env->GetFloatArrayElements(mins, nullptr);
+    jfloat* maxData = env->GetFloatArrayElements(maxs, nullptr);
+    if (!minData || !maxData || boxCount <= 0) {
+        if (minData) env->ReleaseFloatArrayElements(mins, minData, 0);
+        if (maxData) env->ReleaseFloatArrayElements(maxs, maxData, 0);
+        return;
+    }
+
+    JPH::StaticCompoundShapeSettings compoundSettings;
+    for (int i = 0; i < boxCount; ++i) {
+        int offset = i * 3;
+        JPH::Vec3 min(minData[offset], minData[offset + 1], minData[offset + 2]);
+        JPH::Vec3 max(maxData[offset], maxData[offset + 1], maxData[offset + 2]);
+
+        JPH::Vec3 center = (min + max) * 0.5f;
+        JPH::Vec3 halfExtent = (max - min) * 0.5f;
+        compoundSettings.AddShape(center, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent));
+    }
+
+    env->ReleaseFloatArrayElements(mins, minData, 0);
+    env->ReleaseFloatArrayElements(maxs, maxData, 0);
+
+    JPH::ShapeSettings::ShapeResult result = compoundSettings.Create();
+    if (result.HasError()) return;
+
+    JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
+    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
+    if (bi.IsAdded(id)) {
+        bi.SetShape(id, result.Get(), false, JPH::EActivation::Activate);
+    }
+}
+
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeRemoveBody(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
     if (!pw || !pw->mPhysicsSystem) return;

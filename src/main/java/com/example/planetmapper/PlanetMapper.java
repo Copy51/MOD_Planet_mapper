@@ -50,6 +50,7 @@ public class PlanetMapper {
         }
         
         NeoForge.EVENT_BUS.addListener(this::onServerStarting);
+        NeoForge.EVENT_BUS.register(com.example.planetmapper.handler.PhysicsEntityHandler.class);
 
         LOGGER.info("Planet Mapper Initialized");
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
@@ -69,6 +70,7 @@ public class PlanetMapper {
         LandingCommand.register(event.getDispatcher());
         com.example.planetmapper.command.PhysicsTestCommand.register(event.getDispatcher());
         com.example.planetmapper.command.StructureCommand.register(event.getDispatcher());
+        com.example.planetmapper.command.ShipBuilderCommand.register(event.getDispatcher());
         
         com.example.planetmapper.physics.PhysicsWorldManager.init();
     }

@@ -23,10 +23,11 @@ public class PhysicsBlockRenderer extends EntityRenderer<PhysicsBlockEntity> {
         poseStack.pushPose();
 
         // Apply rotation from physics engine (Quaternion)
-        // Interpolate using partialTick for smooth 60Hz+ rendering
+        // Physics center is 0.5 blocks above the entity's feet (setPos position)
+        poseStack.translate(0, 0.5, 0); 
         poseStack.mulPose(entity.getPhysicsRotation(partialTick));
-
-        // Center the block rendering (blocks are 0..1, physics bodies are centered)
+        
+        // Move back to corner to render 1x1x1 block
         poseStack.translate(-0.5, -0.5, -0.5);
 
         // Render a generic stone block for now. 

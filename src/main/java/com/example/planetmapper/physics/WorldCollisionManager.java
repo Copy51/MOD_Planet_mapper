@@ -20,8 +20,6 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.phys.AABB;
 
 import java.util.List;
-import java.util.Set;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.CompletableFuture;
@@ -210,7 +208,7 @@ public class WorldCollisionManager {
                     if (task.solidBlocks.isEmpty()) {
                         return List.<AABB>of();
                     }
-                    return VoxelShapeOptimizer.optimize(task.solidBlocks);
+                    return VoxelShapeOptimizer.optimizeLongSet(task.solidBlocks);
                 }, getExecutor())
                 .thenAccept(boxes -> level.getServer().execute(() -> finishBuild(level, task, boxes)))
                 .exceptionally(ex -> {
@@ -364,7 +362,7 @@ public class WorldCollisionManager {
         private final ChunkPos chunkPos;
         private final int minY;
         private final int maxY;
-        private final Set<BlockPos> solidBlocks = new HashSet<>();
+        private final LongOpenHashSet solidBlocks = new LongOpenHashSet();
         private int currentX;
         private int currentY;
         private int currentZ;
@@ -425,7 +423,7 @@ public class WorldCollisionManager {
                 cursor.set(currentX, currentY, currentZ);
                 BlockState state = chunk.getBlockState(cursor);
                 if (!state.isAir() && !state.getCollisionShape(level, cursor).isEmpty()) {
-                    solidBlocks.add(cursor.immutable());
+                    solidBlocks.add(BlockPos.asLong(cursor.getX(), cursor.getY(), cursor.getZ()));
                 }
 
                 processed++;

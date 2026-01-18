@@ -44,6 +44,14 @@ public final class PhysicsColliderManager {
                 new com.example.planetmapper.network.DynamicColliderSyncPacket(level.dimension().location(), bodyId, worldBoxes)
         );
     }
+
+    public static void updateAndSyncBody(ServerLevel level, long bodyId, List<AABB> bodyLocalBoxes) {
+        updateDynamicBody(bodyId, bodyLocalBoxes);
+        net.neoforged.neoforge.network.PacketDistributor.sendToPlayersInDimension(
+                level,
+                new com.example.planetmapper.network.DynamicColliderUpdatePacket(level.dimension().location(), bodyId, bodyLocalBoxes)
+        );
+    }
     
 
     public static void unregisterAndSyncBody(ServerLevel level, long bodyId) {
@@ -63,9 +71,45 @@ public final class PhysicsColliderManager {
         }
     }
 
+    public static void updateDynamicBody(long bodyId, List<AABB> bodyLocalBoxes) {
+        if (bodyLocalBoxes == null) {
+            return;
+        }
+        synchronized (DYNAMIC_BODIES) {
+            DynamicCollider collider = DYNAMIC_BODIES.get(bodyId);
+            if (collider != null) {
+                collider.setLocalBoxes(bodyLocalBoxes);
+            }
+        }
+    }
+
+    public static Float raycastBody(long bodyId, Vec3 origin, Vec3 direction, double maxDistance) {
+        synchronized (DYNAMIC_BODIES) {
+            DynamicCollider collider = DYNAMIC_BODIES.get(bodyId);
+            if (collider == null) {
+                return null;
+            }
+            return collider.raycast(origin, direction, maxDistance);
+        }
+    }
+
     public static void unregisterDynamicBody(long bodyId) {
         synchronized (DYNAMIC_BODIES) {
             DYNAMIC_BODIES.remove(bodyId);
+        }
+    }
+
+    public static List<AABB> getWorldBoxes(ServerLevel level, long bodyId) {
+        if (level == null || bodyId <= 0) {
+            return Collections.emptyList();
+        }
+        ensureUpdated(level);
+        synchronized (DYNAMIC_BODIES) {
+            DynamicCollider collider = DYNAMIC_BODIES.get(bodyId);
+            if (collider == null || collider.dimension != level.dimension()) {
+                return Collections.emptyList();
+            }
+            return collider.copyWorldBoxes();
         }
     }
 
@@ -164,7 +208,7 @@ public final class PhysicsColliderManager {
     private static final class DynamicCollider {
         private final ResourceKey<Level> dimension;
         private final long bodyId;
-        private final List<LocalBox> localBoxes;
+        private List<LocalBox> localBoxes;
         private final float[] stateBuffer = new float[13];
         private List<AABB> worldBoxes = Collections.emptyList();
         private AABB bounds;
@@ -198,21 +242,54 @@ public final class PhysicsColliderManager {
                     (float) ((minZ + maxZ) * 0.5)
             );
 
-            List<LocalBox> localBoxes = new ArrayList<>(worldBoxes.size());
-            for (AABB box : worldBoxes) {
-                float centerX = (float) ((box.minX + box.maxX) * 0.5);
-                float centerY = (float) ((box.minY + box.maxY) * 0.5);
-                float centerZ = (float) ((box.minZ + box.maxZ) * 0.5);
-                Vector3f localCenter = new Vector3f(centerX, centerY, centerZ).sub(bodyCenter);
-                Vector3f halfExtents = new Vector3f(
-                        (float) ((box.maxX - box.minX) * 0.5),
-                        (float) ((box.maxY - box.minY) * 0.5),
-                        (float) ((box.maxZ - box.minZ) * 0.5)
-                );
-                localBoxes.add(new LocalBox(localCenter, halfExtents));
-            }
+            List<LocalBox> localBoxes = buildLocalBoxes(worldBoxes, bodyCenter);
 
             return new DynamicCollider(dimension, bodyId, localBoxes);
+        }
+
+        private void setLocalBoxes(List<AABB> bodyLocalBoxes) {
+            this.localBoxes = buildLocalBoxes(bodyLocalBoxes, new Vector3f());
+            this.worldBoxes = Collections.emptyList();
+            this.bounds = null;
+        }
+
+        private static List<LocalBox> buildLocalBoxes(List<AABB> boxes, Vector3f bodyCenter) {
+            int subdivisions = 4;
+            List<LocalBox> localBoxes = new ArrayList<>();
+
+            for (AABB box : boxes) {
+                double minX = box.minX - bodyCenter.x;
+                double minY = box.minY - bodyCenter.y;
+                double minZ = box.minZ - bodyCenter.z;
+                double maxX = box.maxX - bodyCenter.x;
+                double maxY = box.maxY - bodyCenter.y;
+                double maxZ = box.maxZ - bodyCenter.z;
+
+                double sizeX = (maxX - minX) / subdivisions;
+                double sizeY = (maxY - minY) / subdivisions;
+                double sizeZ = (maxZ - minZ) / subdivisions;
+
+                Vector3f halfExtents = new Vector3f(
+                        (float) (sizeX * 0.5),
+                        (float) (sizeY * 0.5),
+                        (float) (sizeZ * 0.5)
+                );
+
+                for (int x = 0; x < subdivisions; x++) {
+                    for (int y = 0; y < subdivisions; y++) {
+                        for (int z = 0; z < subdivisions; z++) {
+                            double centerX = minX + (x + 0.5) * sizeX;
+                            double centerY = minY + (y + 0.5) * sizeY;
+                            double centerZ = minZ + (z + 0.5) * sizeZ;
+
+                            Vector3f localCenter = new Vector3f((float) centerX, (float) centerY, (float) centerZ);
+                            localBoxes.add(new LocalBox(localCenter, halfExtents));
+                        }
+                    }
+                }
+            }
+
+            return localBoxes;
         }
 
         private void update(NativePhysicsEngine engine) {
@@ -276,12 +353,75 @@ public final class PhysicsColliderManager {
             }
         }
 
+        private List<AABB> copyWorldBoxes() {
+            if (worldBoxes.isEmpty()) {
+                return Collections.emptyList();
+            }
+            return new ArrayList<>(worldBoxes);
+        }
+
         private void appendShapes(AABB query, List<VoxelShape> shapes) {
             for (AABB box : worldBoxes) {
                 if (box.intersects(query)) {
                     shapes.add(Shapes.create(box));
                 }
             }
+        }
+
+        private Float raycast(Vec3 origin, Vec3 direction, double maxDistance) {
+            double best = Double.POSITIVE_INFINITY;
+            for (AABB box : worldBoxes) {
+                Float hit = intersectRayAabb(origin, direction, box);
+                if (hit != null && hit >= 0.0 && hit <= maxDistance && hit < best) {
+                    best = hit;
+                }
+            }
+            return best == Double.POSITIVE_INFINITY ? null : (float) best;
+        }
+
+        private Float intersectRayAabb(Vec3 origin, Vec3 dir, AABB box) {
+            double tMin = 0.0;
+            double tMax = Double.MAX_VALUE;
+
+            double ox = origin.x;
+            double oy = origin.y;
+            double oz = origin.z;
+            double dx = dir.x;
+            double dy = dir.y;
+            double dz = dir.z;
+
+            if (Math.abs(dx) < 1.0E-9) {
+                if (ox < box.minX || ox > box.maxX) return null;
+            } else {
+                double inv = 1.0 / dx;
+                double t1 = (box.minX - ox) * inv;
+                double t2 = (box.maxX - ox) * inv;
+                tMin = Math.max(tMin, Math.min(t1, t2));
+                tMax = Math.min(tMax, Math.max(t1, t2));
+            }
+
+            if (Math.abs(dy) < 1.0E-9) {
+                if (oy < box.minY || oy > box.maxY) return null;
+            } else {
+                double inv = 1.0 / dy;
+                double t1 = (box.minY - oy) * inv;
+                double t2 = (box.maxY - oy) * inv;
+                tMin = Math.max(tMin, Math.min(t1, t2));
+                tMax = Math.min(tMax, Math.max(t1, t2));
+            }
+
+            if (Math.abs(dz) < 1.0E-9) {
+                if (oz < box.minZ || oz > box.maxZ) return null;
+            } else {
+                double inv = 1.0 / dz;
+                double t1 = (box.minZ - oz) * inv;
+                double t2 = (box.maxZ - oz) * inv;
+                tMin = Math.max(tMin, Math.min(t1, t2));
+                tMax = Math.min(tMax, Math.max(t1, t2));
+            }
+
+            if (tMin > tMax) return null;
+            return (float) tMin;
         }
     }
 

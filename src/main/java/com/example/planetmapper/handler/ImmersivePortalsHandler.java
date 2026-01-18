@@ -29,16 +29,16 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ImmersivePortalsHandler {
 
-    private static final double PORTAL_SPAWN_DISTANCE = 220.0;
-    private static final double PORTAL_DESPAWN_DISTANCE = 260.0;
-    private static final double PORTAL_PRELOAD_DISTANCE = 600.0;
+    private static final double PORTAL_SPAWN_DISTANCE = 500.0; // Increased to appear sooner
+    private static final double PORTAL_DESPAWN_DISTANCE = 600.0;
+    private static final double PORTAL_PRELOAD_DISTANCE = 1000.0; // Preload earlier
     private static final int PRELOAD_CHUNK_RADIUS = 8;
-    private static final double PORTAL_OFFSET = 2.0;
-    private static final double DESTINATION_Y = 310.0;
-    private static final double MIN_PORTAL_SIZE = 12.0;
-    private static final double MAX_PORTAL_SIZE = 120.0;
-    private static final double MAX_SURFACE_PORTAL_SIZE = 256.0;
-    private static final double PORTAL_THICKNESS = 1.0;
+    private static final double PORTAL_OFFSET = 5.0; // Slightly further out
+    private static final double DESTINATION_Y = 320.0; // Higher up on surface to avoid mountains
+    private static final double MIN_PORTAL_SIZE = 20.0;
+    private static final double MAX_PORTAL_SIZE = 300.0; // Much larger max size for seeing more
+    private static final double MAX_SURFACE_PORTAL_SIZE = 1000.0; // Huge surface portal
+    private static final double PORTAL_THICKNESS = 0.5;
     private static final double EPS = 1.0e-6;
 
     private boolean alreadyConfigured = false;

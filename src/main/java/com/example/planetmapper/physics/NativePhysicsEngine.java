@@ -1,5 +1,6 @@
 package com.example.planetmapper.physics;
 
+import com.example.planetmapper.PlanetMapper;
 import net.minecraft.world.phys.AABB;
 import org.joml.Vector3f;
 
@@ -17,6 +18,8 @@ import java.util.Locale;
 public class NativePhysicsEngine {
 
     private static boolean libraryLoaded = false;
+    private static volatile boolean updateShapeAvailable = true;
+    private static volatile boolean updateShapeWarningLogged = false;
     private long worldPointer = 0;
 
     // Native methods - implemented in C++
@@ -28,6 +31,7 @@ public class NativePhysicsEngine {
     private static native void nativeGetBodyState(long worldPtr, long bodyId, float[] outState);
     private static native void nativeApplyForce(long worldPtr, long bodyId, float fx, float fy, float fz);
     private static native void nativeActivateBody(long worldPtr, long bodyId);
+    private static native void nativeUpdateBodyShape(long worldPtr, long bodyId, float[] mins, float[] maxs, int boxCount);
     private static native void nativeRemoveBody(long worldPtr, long bodyId);
     private static native void nativeCleanupPhysicsWorld(long worldPtr);
 
@@ -160,6 +164,37 @@ public class NativePhysicsEngine {
     public synchronized void activateBody(long bodyId) {
         if (worldPointer != 0) {
             nativeActivateBody(worldPointer, bodyId);
+        }
+    }
+
+    public synchronized void updateBodyShape(long bodyId, List<AABB> localBoxes) {
+        if (!updateShapeAvailable || worldPointer == 0 || localBoxes == null || localBoxes.isEmpty()) {
+            return;
+        }
+        int count = localBoxes.size();
+        float[] mins = new float[count * 3];
+        float[] maxs = new float[count * 3];
+
+        for (int i = 0; i < count; i++) {
+            AABB box = localBoxes.get(i);
+            int offset = i * 3;
+            mins[offset] = (float) box.minX;
+            mins[offset + 1] = (float) box.minY;
+            mins[offset + 2] = (float) box.minZ;
+
+            maxs[offset] = (float) box.maxX;
+            maxs[offset + 1] = (float) box.maxY;
+            maxs[offset + 2] = (float) box.maxZ;
+        }
+
+        try {
+            nativeUpdateBodyShape(worldPointer, bodyId, mins, maxs, count);
+        } catch (UnsatisfiedLinkError e) {
+            updateShapeAvailable = false;
+            if (!updateShapeWarningLogged) {
+                updateShapeWarningLogged = true;
+                PlanetMapper.LOGGER.error("nativeUpdateBodyShape is missing in native_physics.dll. Update the JNI library to enable collision rebuilds.", e);
+            }
         }
     }
 

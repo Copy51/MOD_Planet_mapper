@@ -90,6 +90,7 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
         if (!this.level().isClientSide) {
              long id = getBodyId();
              if (id > 0) {
+                 com.example.planetmapper.physics.structure.StructurePhysicsManager.unregisterStructure(id);
                  if (this.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
                      com.example.planetmapper.physics.PhysicsColliderManager.unregisterAndSyncBody(serverLevel, id);
                  }
@@ -99,7 +100,8 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
     
     public void updateFromPacket(double x, double y, double z, Quaternionf rot) {
         // Update interpolation targets
-        this.setPos(x, y, z);
+        // IMPORTANT: Move feet position to center - 0.5 to align with physics
+        this.setPos(x, y - 0.5, z);
         this.rotation.set(rot);
     }
 
@@ -158,4 +160,23 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
     public Quaternionf getPhysicsRotation() {
         return rotation;
     }
+    @Override
+    public net.minecraft.world.phys.HitResult pick(double hitDist, float partialTicks, boolean screen) {
+        Vec3 eyePos = this.getEyePosition(partialTicks);
+        Vec3 viewVec = this.getViewVector(partialTicks);
+        Float t = com.example.planetmapper.physics.PhysicsColliderManager.raycastBody(getBodyId(), eyePos, viewVec, hitDist);
+        if (t != null && t >= 0.0f && t <= hitDist) {
+            Vec3 hitPos = eyePos.add(viewVec.scale(t));
+            return new net.minecraft.world.phys.EntityHitResult(this, hitPos);
+        }
+        return null;
+    }
+    
+    // Also override getBoundingBox explicitly just in case, though Entity handles it.
+    // We want the AABB to be large enough to catch the ray
+    @Override
+    public net.minecraft.world.phys.AABB getBoundingBoxForCulling() {
+        return super.getBoundingBox().inflate(1.0); // Simple inflation
+    }
+
 }

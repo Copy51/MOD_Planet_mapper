@@ -18,6 +18,13 @@ public class ModEntities {
                     .updateInterval(1) // Important for smooth physics!
                     .build("physics_block"));
 
+    public static final DeferredHolder<EntityType<?>, EntityType<PhysicsStructureEntity>> PHYSICS_STRUCTURE = ENTITIES.register("physics_structure", () ->
+            EntityType.Builder.<PhysicsStructureEntity>of(PhysicsStructureEntity::new, MobCategory.MISC)
+                    .sized(1.0f, 1.0f)
+                    .clientTrackingRange(10)
+                    .updateInterval(1)
+                    .build("physics_structure"));
+
     public static void register(IEventBus eventBus) {
         ENTITIES.register(eventBus);
     }

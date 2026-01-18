@@ -7,6 +7,7 @@ import com.example.planetmapper.physics.PhysicsColliderManager;
 import com.example.planetmapper.physics.PhysicsWorldManager;
 import com.example.planetmapper.physics.WorldCollisionManager;
 import com.example.planetmapper.physics.VoxelShapeOptimizer;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -21,7 +22,9 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
+import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -186,6 +189,15 @@ public class StructureBuildManager {
 
         PhysicsColliderManager.registerAndSyncBody(level, bodyId, boxes);
 
+        Vector3f bodyCenter = computeBodyCenter(boxes);
+        Vector3f originOffset = new Vector3f(
+                (float) (task.min.getX() - bodyCenter.x),
+                (float) (task.min.getY() - bodyCenter.y),
+                (float) (task.min.getZ() - bodyCenter.z)
+        );
+        PhysicsStructure structure = new PhysicsStructure(level.dimension(), bodyId, task.min, originOffset, task.blocks, task.collidableBlocks);
+        StructurePhysicsManager.registerStructure(structure);
+
         BlockPos min = task.min;
         BlockPos max = task.max;
         double centerX = (min.getX() + max.getX() + 1) / 2.0;
@@ -203,13 +215,39 @@ public class StructureBuildManager {
 
         task.solidBlocks.clear();
         task.state = BuildState.DONE;
-        task.sendToOwner(level, "Structure physics created! Body ID: " + bodyId + ", blocks: " + task.solidBlockCount);
+        task.sendToOwner(level, "Structure physics created! Body ID: " + bodyId + ", blocks: " + task.totalBlockCount);
     }
 
     private static void failBuild(ServerLevel level, StructureBuildTask task, String reason) {
         task.state = BuildState.FAILED;
         task.sendToOwner(level, reason);
         task.solidBlocks.clear();
+        task.blocks.clear();
+        task.collidableBlocks.clear();
+    }
+
+    private static Vector3f computeBodyCenter(List<AABB> boxes) {
+        double minX = Double.POSITIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY;
+        double minZ = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        double maxY = Double.NEGATIVE_INFINITY;
+        double maxZ = Double.NEGATIVE_INFINITY;
+
+        for (AABB box : boxes) {
+            minX = Math.min(minX, box.minX);
+            minY = Math.min(minY, box.minY);
+            minZ = Math.min(minZ, box.minZ);
+            maxX = Math.max(maxX, box.maxX);
+            maxY = Math.max(maxY, box.maxY);
+            maxZ = Math.max(maxZ, box.maxZ);
+        }
+
+        return new Vector3f(
+                (float) ((minX + maxX) * 0.5),
+                (float) ((minY + maxY) * 0.5),
+                (float) ((minZ + maxZ) * 0.5)
+        );
     }
 
     private enum BuildState {
@@ -226,9 +264,12 @@ public class StructureBuildManager {
         private final BlockPos max;
         private final long totalVolume;
         private final Set<BlockPos> solidBlocks = new HashSet<>();
+        private final Long2ObjectOpenHashMap<StructureBlockData> blocks = new Long2ObjectOpenHashMap<>();
+        private final LongOpenHashSet collidableBlocks = new LongOpenHashSet();
         private final LongOpenHashSet dirtyChunks = new LongOpenHashSet();
         private long processedVolume;
         private long solidBlockCount;
+        private long totalBlockCount;
         private int currentX;
         private int currentY;
         private int currentZ;
@@ -268,9 +309,19 @@ public class StructureBuildManager {
                 }
 
                 BlockState state = level.getBlockState(cursor);
-                if (!state.isAir() && !state.getCollisionShape(level, cursor).isEmpty()) {
-                    solidBlocks.add(cursor.immutable());
-                    solidBlockCount++;
+                if (!state.isAir()) {
+                    boolean collidable = !state.getCollisionShape(level, cursor).isEmpty();
+                    if (collidable) {
+                        solidBlocks.add(cursor.immutable());
+                        solidBlockCount++;
+                        collidableBlocks.add(BlockPos.asLong(cursor.getX() - min.getX(), cursor.getY() - min.getY(), cursor.getZ() - min.getZ()));
+                    }
+
+                    BlockEntity blockEntity = level.getBlockEntity(cursor);
+                    blocks.put(BlockPos.asLong(cursor.getX() - min.getX(), cursor.getY() - min.getY(), cursor.getZ() - min.getZ()),
+                            new StructureBlockData(state, blockEntity != null ? blockEntity.saveWithId(level.registryAccess()) : null, collidable));
+                    totalBlockCount++;
+
                     level.setBlock(cursor, Blocks.AIR.defaultBlockState(),
                             Block.UPDATE_CLIENTS | Block.UPDATE_SUPPRESS_DROPS);
 

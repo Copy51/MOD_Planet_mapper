@@ -20,5 +20,7 @@ public class ClientModEvents {
     public static void registerRenderers(net.neoforged.neoforge.client.event.EntityRenderersEvent.RegisterRenderers event) {
         event.registerEntityRenderer(com.example.planetmapper.entity.ModEntities.PHYSICS_BLOCK.get(), 
                 com.example.planetmapper.client.renderer.PhysicsBlockRenderer::new);
+        event.registerEntityRenderer(com.example.planetmapper.entity.ModEntities.PHYSICS_STRUCTURE.get(),
+                com.example.planetmapper.client.renderer.PhysicsStructureRenderer::new);
     }
 }

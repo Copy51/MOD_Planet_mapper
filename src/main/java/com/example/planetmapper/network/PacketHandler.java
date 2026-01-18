@@ -39,6 +39,11 @@ public class PacketHandler {
                 DynamicColliderSyncPacket::handle);
 
         registrar.playToClient(
+                DynamicColliderUpdatePacket.TYPE,
+                DynamicColliderUpdatePacket.STREAM_CODEC,
+                DynamicColliderUpdatePacket::handle);
+
+        registrar.playToClient(
                 DynamicColliderRemovePacket.TYPE,
                 DynamicColliderRemovePacket.STREAM_CODEC,
                 DynamicColliderRemovePacket::handle);
@@ -47,5 +52,15 @@ public class PacketHandler {
                 PhysicsEntitySyncPacket.TYPE,
                 PhysicsEntitySyncPacket.STREAM_CODEC,
                 PhysicsEntitySyncPacket::handle);
+
+        registrar.playToClient(
+                StructureSyncPacket.TYPE,
+                StructureSyncPacket.STREAM_CODEC,
+                StructureSyncPacket::handle);
+
+        registrar.playToServer(
+                ShipControlPacket.TYPE,
+                ShipControlPacket.STREAM_CODEC,
+                ShipControlPacket::handle);
     }
 }

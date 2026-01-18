@@ -3,6 +3,8 @@ package com.example.planetmapper.handler;
 import com.example.planetmapper.PlanetMapper;
 import com.example.planetmapper.physics.WorldCollisionManager;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.ChunkPos;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
@@ -11,6 +13,7 @@ import net.neoforged.neoforge.event.level.ChunkEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
+import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 
 @EventBusSubscriber(modid = PlanetMapper.MODID, bus = EventBusSubscriber.Bus.GAME)
 public class WorldCollisionHandler {
@@ -42,6 +45,26 @@ public class WorldCollisionHandler {
         }
         if (event.getLevel() instanceof ServerLevel level) {
             WorldCollisionManager.tick(level);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onPlayerTick(PlayerTickEvent.Post event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        if (!(player.level() instanceof ServerLevel level)) {
+            return;
+        }
+        long gameTime = level.getGameTime();
+        if ((gameTime + player.getId()) % 20 != 0) {
+            return;
+        }
+        ChunkPos center = player.chunkPosition();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                WorldCollisionManager.ensureChunkCollider(level, new ChunkPos(center.x + dx, center.z + dz));
+            }
         }
     }
 

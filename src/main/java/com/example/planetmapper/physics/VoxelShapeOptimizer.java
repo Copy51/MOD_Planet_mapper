@@ -1,8 +1,9 @@
 package com.example.planetmapper.physics;
 
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
-import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -76,5 +77,80 @@ public class VoxelShapeOptimizer {
         }
 
         return result;
+    }
+
+    public static List<AABB> optimizeLongSet(LongOpenHashSet blocks) {
+        List<AABB> result = new ArrayList<>();
+        LongOpenHashSet processed = new LongOpenHashSet();
+
+        LongIterator iterator = blocks.iterator();
+        while (iterator.hasNext()) {
+            long key = iterator.nextLong();
+            if (processed.contains(key)) {
+                continue;
+            }
+
+            int x = BlockPos.getX(key);
+            int y = BlockPos.getY(key);
+            int z = BlockPos.getZ(key);
+
+            int width = 1;
+            while (containsBlock(blocks, processed, x + width, y, z)) {
+                width++;
+            }
+
+            int height = 1;
+            boolean canGrowY = true;
+            while (canGrowY) {
+                for (int dx = 0; dx < width; dx++) {
+                    if (!containsBlock(blocks, processed, x + dx, y + height, z)) {
+                        canGrowY = false;
+                        break;
+                    }
+                }
+                if (canGrowY) {
+                    height++;
+                }
+            }
+
+            int depth = 1;
+            boolean canGrowZ = true;
+            while (canGrowZ) {
+                for (int dx = 0; dx < width; dx++) {
+                    for (int dy = 0; dy < height; dy++) {
+                        if (!containsBlock(blocks, processed, x + dx, y + dy, z + depth)) {
+                            canGrowZ = false;
+                            break;
+                        }
+                    }
+                    if (!canGrowZ) {
+                        break;
+                    }
+                }
+                if (canGrowZ) {
+                    depth++;
+                }
+            }
+
+            for (int dx = 0; dx < width; dx++) {
+                for (int dy = 0; dy < height; dy++) {
+                    for (int dz = 0; dz < depth; dz++) {
+                        processed.add(BlockPos.asLong(x + dx, y + dy, z + dz));
+                    }
+                }
+            }
+
+            result.add(new AABB(
+                    x, y, z,
+                    x + width, y + height, z + depth
+            ));
+        }
+
+        return result;
+    }
+
+    private static boolean containsBlock(LongOpenHashSet blocks, LongOpenHashSet processed, int x, int y, int z) {
+        long key = BlockPos.asLong(x, y, z);
+        return blocks.contains(key) && !processed.contains(key);
     }
 }
