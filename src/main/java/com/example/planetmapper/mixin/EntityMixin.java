@@ -29,6 +29,8 @@ public abstract class EntityMixin {
         // Run only on server side to manage actual position
         if (entity.level().isClientSide)
             return;
+        if (!Config.WORLD_WRAP_ENABLED.get())
+            return;
 
         // If Immersive Portals is loaded, let it handle the wrapping (seamless)
         if (ModList.get().isLoaded("imm_ptl") || ModList.get().isLoaded("immersive_portals")

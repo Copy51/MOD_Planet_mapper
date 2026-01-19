@@ -1,0 +1,9 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "#minecraft:wool", "required": false },
+    { "id": "#minecraft:carpets", "required": false },
+    "minecraft:sponge",
+    "minecraft:wet_sponge"
+  ]
+}

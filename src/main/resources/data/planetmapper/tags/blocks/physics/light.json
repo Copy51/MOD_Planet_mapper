@@ -1,0 +1,9 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "#minecraft:leaves", "required": false },
+    { "id": "#minecraft:flowers", "required": false },
+    "minecraft:torch",
+    "minecraft:lantern"
+  ]
+}

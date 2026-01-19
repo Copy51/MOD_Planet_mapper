@@ -2,21 +2,20 @@ package com.example.planetmapper.physics.structure;
 
 import com.example.planetmapper.Config;
 import com.example.planetmapper.physics.NativePhysicsEngine;
-import com.example.planetmapper.physics.PhysicsBodyEntityAdapter;
 import com.example.planetmapper.physics.PhysicsColliderManager;
 import com.example.planetmapper.physics.PhysicsWorldManager;
 import com.example.planetmapper.physics.WorldCollisionManager;
 import com.example.planetmapper.physics.VoxelShapeOptimizer;
+import com.example.planetmapper.entity.PhysicsStructureEntity;
+import com.example.planetmapper.shipyard.ShipyardManager;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.Display;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
@@ -174,43 +173,84 @@ public class StructureBuildManager {
             return;
         }
 
+        if (!areChunkCollidersReady(level, task.min, task.max)) {
+            task.pendingBoxes = boxes;
+            task.state = BuildState.WAITING_COLLIDERS;
+            task.sendToOwner(level, "Waiting for chunk collision data...");
+            return;
+        }
+
         NativePhysicsEngine engine = PhysicsWorldManager.getEngine();
         if (engine == null) {
             failBuild(level, task, "Physics engine is not initialized.");
             return;
         }
 
-        float mass = Math.max(1.0f, (float) task.solidBlockCount);
-        long bodyId = engine.createRigidBody(boxes, mass);
+        StructurePhysicsProperties physicsProperties = StructurePhysicsProperties.fromBlocks(task.blocks);
+        StructurePhysicsProperties.MaterialSummary material = physicsProperties.snapshot();
+        float mass = Math.max(1.0f, material.mass());
+        long bodyId = engine.createRigidBody(boxes, material);
         if (bodyId <= 0) {
             failBuild(level, task, "Failed to create physics body.");
             return;
         }
 
-        PhysicsColliderManager.registerAndSyncBody(level, bodyId, boxes);
+        float[] stateBuffer = new float[13];
+        engine.getBodyState(bodyId, stateBuffer);
+        Vector3f bodyPos = new Vector3f(stateBuffer[0], stateBuffer[1], stateBuffer[2]);
+        org.joml.Quaternionf bodyRot = new org.joml.Quaternionf(stateBuffer[3], stateBuffer[4], stateBuffer[5], stateBuffer[6]);
 
-        Vector3f bodyCenter = computeBodyCenter(boxes);
+        PhysicsColliderManager.registerAndSyncBody(level, bodyId, boxes, bodyPos);
+        List<AABB> bodyLocalBoxes = new ArrayList<>(boxes.size());
+        for (AABB box : boxes) {
+            bodyLocalBoxes.add(new AABB(
+                    box.minX - bodyPos.x, box.minY - bodyPos.y, box.minZ - bodyPos.z,
+                    box.maxX - bodyPos.x, box.maxY - bodyPos.y, box.maxZ - bodyPos.z
+            ));
+        }
+        PhysicsColliderManager.updateAndSyncBody(level, bodyId, bodyLocalBoxes);
+        PhysicsColliderManager.updateBodyTransform(bodyId, bodyPos.x, bodyPos.y, bodyPos.z, bodyRot);
+
         Vector3f originOffset = new Vector3f(
-                (float) (task.min.getX() - bodyCenter.x),
-                (float) (task.min.getY() - bodyCenter.y),
-                (float) (task.min.getZ() - bodyCenter.z)
+                (float) (task.min.getX() - bodyPos.x),
+                (float) (task.min.getY() - bodyPos.y),
+                (float) (task.min.getZ() - bodyPos.z)
         );
-        PhysicsStructure structure = new PhysicsStructure(level.dimension(), bodyId, task.min, originOffset, task.blocks, task.collidableBlocks);
+        PhysicsStructure structure = new PhysicsStructure(level.dimension(), bodyId, task.min, originOffset, task.blocks, task.collidableBlocks, physicsProperties);
         StructurePhysicsManager.registerStructure(structure);
 
-        BlockPos min = task.min;
-        BlockPos max = task.max;
-        double centerX = (min.getX() + max.getX() + 1) / 2.0;
-        double centerY = (min.getY() + max.getY() + 1) / 2.0;
-        double centerZ = (min.getZ() + max.getZ() + 1) / 2.0;
+        Map<BlockPos, BlockState> renderBlocks = new HashMap<>(task.blocks.size());
+        Map<BlockPos, net.minecraft.nbt.CompoundTag> renderBlockEntities = new HashMap<>();
+        task.blocks.long2ObjectEntrySet().forEach(entry -> {
+            BlockPos localPos = BlockPos.of(entry.getLongKey());
+            StructureBlockData data = entry.getValue();
+            renderBlocks.put(localPos, data.state());
+            if (data.blockEntityTag() != null && !data.blockEntityTag().isEmpty()) {
+                renderBlockEntities.put(localPos, data.blockEntityTag());
+            }
+        });
 
-        com.example.planetmapper.entity.PhysicsBlockEntity physicsEntity = com.example.planetmapper.entity.ModEntities.PHYSICS_BLOCK.get().create(level);
+        PhysicsStructureEntity physicsEntity = com.example.planetmapper.entity.ModEntities.PHYSICS_STRUCTURE.get().create(level);
         if (physicsEntity != null) {
-            // Spawn at feet position (center - 0.5) to match physics offset
-            physicsEntity.setPos(centerX, centerY - 0.5, centerZ);
+            physicsEntity.setPos(bodyPos.x, bodyPos.y - physicsEntity.getBodyYOffset(), bodyPos.z);
             physicsEntity.setBodyId(bodyId);
+            physicsEntity.setOriginOffset(originOffset);
+            physicsEntity.setStructure(renderBlocks, renderBlockEntities);
             level.addFreshEntity(physicsEntity);
             PhysicsWorldManager.registerEntity(physicsEntity);
+            structure.setEntityId(physicsEntity.getId());
+        }
+
+        ServerLevel shipyard = ShipyardManager.getShipyardLevel(level.getServer());
+        if (shipyard != null && physicsEntity != null) {
+            int sizeX = task.max.getX() - task.min.getX() + 1;
+            int sizeY = task.max.getY() - task.min.getY() + 1;
+            int sizeZ = task.max.getZ() - task.min.getZ() + 1;
+            ShipyardManager.ShipyardRegion region = ShipyardManager.ensureRegion(shipyard, physicsEntity.getUUID(), bodyId, sizeX, sizeY, sizeZ);
+            ShipyardManager.placeBlocks(shipyard, region, task.blocks);
+            ShipyardManager.queueNeighborUpdates(region, task.blocks);
+        } else {
+            task.sendToOwner(level, "Shipyard dimension not available. Functional blocks will not tick.");
         }
 
         task.solidBlocks.clear();
@@ -226,33 +266,34 @@ public class StructureBuildManager {
         task.collidableBlocks.clear();
     }
 
-    private static Vector3f computeBodyCenter(List<AABB> boxes) {
-        double minX = Double.POSITIVE_INFINITY;
-        double minY = Double.POSITIVE_INFINITY;
-        double minZ = Double.POSITIVE_INFINITY;
-        double maxX = Double.NEGATIVE_INFINITY;
-        double maxY = Double.NEGATIVE_INFINITY;
-        double maxZ = Double.NEGATIVE_INFINITY;
-
-        for (AABB box : boxes) {
-            minX = Math.min(minX, box.minX);
-            minY = Math.min(minY, box.minY);
-            minZ = Math.min(minZ, box.minZ);
-            maxX = Math.max(maxX, box.maxX);
-            maxY = Math.max(maxY, box.maxY);
-            maxZ = Math.max(maxZ, box.maxZ);
+    private static boolean areChunkCollidersReady(ServerLevel level, BlockPos min, BlockPos max) {
+        int minChunkX = min.getX() >> 4;
+        int minChunkZ = min.getZ() >> 4;
+        int maxChunkX = max.getX() >> 4;
+        int maxChunkZ = max.getZ() >> 4;
+        for (int cx = minChunkX; cx <= maxChunkX; cx++) {
+            for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
+                if (!level.hasChunk(cx, cz)) {
+                    return false;
+                }
+                ChunkPos chunkPos = new ChunkPos(cx, cz);
+                if (WorldCollisionManager.isChunkDirty(level, chunkPos)) {
+                    WorldCollisionManager.markChunkDirtyNow(level, chunkPos);
+                    return false;
+                }
+                if (!WorldCollisionManager.isChunkColliderReady(level, chunkPos)) {
+                    WorldCollisionManager.ensureChunkCollider(level, chunkPos);
+                    return false;
+                }
+            }
         }
-
-        return new Vector3f(
-                (float) ((minX + maxX) * 0.5),
-                (float) ((minY + maxY) * 0.5),
-                (float) ((minZ + maxZ) * 0.5)
-        );
+        return true;
     }
 
     private enum BuildState {
         SCANNING,
         OPTIMIZING,
+        WAITING_COLLIDERS,
         DONE,
         FAILED
     }
@@ -275,6 +316,7 @@ public class StructureBuildManager {
         private int currentZ;
         private int lastPercent = -1;
         private boolean warnedChunkMissing = false;
+        private List<AABB> pendingBoxes;
         private BuildState state = BuildState.SCANNING;
 
         private StructureBuildTask(UUID ownerId, ResourceKey<Level> dimension, BlockPos min, BlockPos max, long totalVolume) {
@@ -289,7 +331,14 @@ public class StructureBuildManager {
         }
 
         private void tick(ServerLevel level, int blocksPerTick) {
-            if (state != BuildState.SCANNING || level.dimension() != dimension) {
+            if (level.dimension() != dimension) {
+                return;
+            }
+            if (state == BuildState.WAITING_COLLIDERS) {
+                tryFinalize(level);
+                return;
+            }
+            if (state != BuildState.SCANNING) {
                 return;
             }
 
@@ -327,7 +376,7 @@ public class StructureBuildManager {
 
                     long chunkKey = ChunkPos.asLong(cursor.getX() >> 4, cursor.getZ() >> 4);
                     if (dirtyChunks.add(chunkKey)) {
-                        WorldCollisionManager.markChunkDirty(level, new ChunkPos(chunkKey));
+                        WorldCollisionManager.markChunkDirtyNow(level, new ChunkPos(chunkKey));
                     }
                 }
 
@@ -339,8 +388,21 @@ public class StructureBuildManager {
             reportProgress(level);
 
             if (currentY > max.getY()) {
+                flushChunkColliders(level);
                 startOptimization(level, this);
             }
+        }
+
+        private void tryFinalize(ServerLevel level) {
+            if (pendingBoxes == null) {
+                return;
+            }
+            if (!areChunkCollidersReady(level, min, max)) {
+                return;
+            }
+            List<AABB> boxes = pendingBoxes;
+            pendingBoxes = null;
+            finishBuild(level, this, boxes);
         }
 
         private void advanceCursor() {
@@ -370,6 +432,17 @@ public class StructureBuildManager {
             ServerPlayer player = level.getServer().getPlayerList().getPlayer(ownerId);
             if (player != null) {
                 player.sendSystemMessage(Component.literal(message));
+            }
+        }
+
+        private void flushChunkColliders(ServerLevel level) {
+            if (dirtyChunks.isEmpty()) {
+                return;
+            }
+            LongIterator iterator = dirtyChunks.iterator();
+            while (iterator.hasNext()) {
+                long key = iterator.nextLong();
+                WorldCollisionManager.markChunkDirtyNow(level, new ChunkPos(key));
             }
         }
 

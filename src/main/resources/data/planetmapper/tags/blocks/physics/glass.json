@@ -1,0 +1,9 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "#minecraft:glass", "required": false },
+    { "id": "#minecraft:stained_glass", "required": false },
+    { "id": "#minecraft:glass_panes", "required": false },
+    { "id": "#minecraft:stained_glass_panes", "required": false }
+  ]
+}

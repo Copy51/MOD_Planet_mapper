@@ -1,0 +1,10 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "#minecraft:ice", "required": false },
+    "minecraft:ice",
+    "minecraft:packed_ice",
+    "minecraft:blue_ice",
+    "minecraft:frosted_ice"
+  ]
+}

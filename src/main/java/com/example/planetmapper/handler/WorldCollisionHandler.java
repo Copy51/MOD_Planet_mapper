@@ -24,6 +24,9 @@ public class WorldCollisionHandler {
             return;
         }
         if (event.getLevel() instanceof ServerLevel level) {
+            if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
+                return;
+            }
             WorldCollisionManager.onChunkLoad(level, event.getChunk());
         }
     }
@@ -34,6 +37,9 @@ public class WorldCollisionHandler {
             return;
         }
         if (event.getLevel() instanceof ServerLevel level) {
+            if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
+                return;
+            }
             WorldCollisionManager.onChunkUnload(level, event.getChunk());
         }
     }
@@ -44,6 +50,9 @@ public class WorldCollisionHandler {
             return;
         }
         if (event.getLevel() instanceof ServerLevel level) {
+            if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
+                return;
+            }
             WorldCollisionManager.tick(level);
         }
     }
@@ -54,6 +63,9 @@ public class WorldCollisionHandler {
             return;
         }
         if (!(player.level() instanceof ServerLevel level)) {
+            return;
+        }
+        if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
             return;
         }
         long gameTime = level.getGameTime();
@@ -71,6 +83,7 @@ public class WorldCollisionHandler {
     @SubscribeEvent
     public static void onServerStopping(ServerStoppingEvent event) {
         WorldCollisionManager.shutdown();
+        com.example.planetmapper.physics.PhysicsColliderManager.resetAll();
     }
 
     @SubscribeEvent
@@ -81,6 +94,9 @@ public class WorldCollisionHandler {
     @SubscribeEvent
     public static void onBlockBreak(BlockEvent.BreakEvent event) {
         if (event.getLevel() instanceof ServerLevel level) {
+            if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
+                return;
+            }
             WorldCollisionManager.markChunkDirty(level, event.getPos());
         }
     }
@@ -88,6 +104,9 @@ public class WorldCollisionHandler {
     @SubscribeEvent
     public static void onBlockPlace(BlockEvent.EntityPlaceEvent event) {
         if (event.getLevel() instanceof ServerLevel level) {
+            if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
+                return;
+            }
             WorldCollisionManager.markChunkDirty(level, event.getPos());
         }
     }
@@ -95,6 +114,9 @@ public class WorldCollisionHandler {
     @SubscribeEvent
     public static void onBlockMultiPlace(BlockEvent.EntityMultiPlaceEvent event) {
         if (!(event.getLevel() instanceof ServerLevel level)) {
+            return;
+        }
+        if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
             return;
         }
         for (BlockSnapshot snapshot : event.getReplacedBlockSnapshots()) {
@@ -105,6 +127,9 @@ public class WorldCollisionHandler {
     @SubscribeEvent
     public static void onBlockToolModify(BlockEvent.BlockToolModificationEvent event) {
         if (event.getLevel() instanceof ServerLevel level) {
+            if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
+                return;
+            }
             WorldCollisionManager.markChunkDirty(level, event.getPos());
         }
     }
@@ -112,6 +137,9 @@ public class WorldCollisionHandler {
     @SubscribeEvent
     public static void onFluidPlace(BlockEvent.FluidPlaceBlockEvent event) {
         if (event.getLevel() instanceof ServerLevel level) {
+            if (level.dimension() == PlanetMapper.SHIPYARD_LEVEL) {
+                return;
+            }
             WorldCollisionManager.markChunkDirty(level, event.getPos());
         }
     }

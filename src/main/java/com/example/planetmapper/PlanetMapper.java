@@ -30,6 +30,8 @@ public class PlanetMapper {
 
     public static final ResourceKey<Level> SPACE_LEVEL = ResourceKey.create(Registries.DIMENSION,
             ResourceLocation.fromNamespaceAndPath(MODID, "space"));
+    public static final ResourceKey<Level> SHIPYARD_LEVEL = ResourceKey.create(Registries.DIMENSION,
+            ResourceLocation.fromNamespaceAndPath(MODID, "shipyard"));
 
     public PlanetMapper(IEventBus modEventBus, ModContainer modContainer) {
         // Register Items
@@ -71,6 +73,8 @@ public class PlanetMapper {
         com.example.planetmapper.command.PhysicsTestCommand.register(event.getDispatcher());
         com.example.planetmapper.command.StructureCommand.register(event.getDispatcher());
         com.example.planetmapper.command.ShipBuilderCommand.register(event.getDispatcher());
+        com.example.planetmapper.command.SpawnCubeCommand.register(event.getDispatcher());
+        com.example.planetmapper.command.SpawnPlatformCommand.register(event.getDispatcher());
         
         com.example.planetmapper.physics.PhysicsWorldManager.init();
     }

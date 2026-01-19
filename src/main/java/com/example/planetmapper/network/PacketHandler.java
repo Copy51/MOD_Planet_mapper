@@ -58,6 +58,16 @@ public class PacketHandler {
                 StructureSyncPacket.STREAM_CODEC,
                 StructureSyncPacket::handle);
 
+        registrar.playToClient(
+                StructureSyncChunkPacket.TYPE,
+                StructureSyncChunkPacket.STREAM_CODEC,
+                StructureSyncChunkPacket::handle);
+
+        registrar.playToClient(
+                StructureBlockUpdatePacket.TYPE,
+                StructureBlockUpdatePacket.STREAM_CODEC,
+                StructureBlockUpdatePacket::handle);
+
         registrar.playToServer(
                 ShipControlPacket.TYPE,
                 ShipControlPacket.STREAM_CODEC,

@@ -3,7 +3,8 @@
   "package": "com.example.planetmapper.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "EntityMixin"
+    "EntityMixin",
+    "LevelMixin"
   ],
   "injectors": {
     "defaultRequire": 1

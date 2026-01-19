@@ -15,7 +15,9 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 import java.util.ArrayList;
 import java.util.List;
 
-public record DynamicColliderSyncPacket(ResourceLocation dimensionId, long bodyId, List<AABB> boxes) implements CustomPacketPayload {
+public record DynamicColliderSyncPacket(ResourceLocation dimensionId, long bodyId, List<AABB> boxes,
+                                        double centerX, double centerY, double centerZ,
+                                        float avx, float avy, float avz) implements CustomPacketPayload {
 
     public static final Type<DynamicColliderSyncPacket> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(PlanetMapper.MODID, "sync_collider"));
@@ -24,6 +26,12 @@ public record DynamicColliderSyncPacket(ResourceLocation dimensionId, long bodyI
             (ByteBuf buf, DynamicColliderSyncPacket val) -> {
                 ByteBufCodecs.STRING_UTF8.encode(buf, val.dimensionId.toString());
                 ByteBufCodecs.VAR_LONG.encode(buf, val.bodyId);
+                ByteBufCodecs.DOUBLE.encode(buf, val.centerX);
+                ByteBufCodecs.DOUBLE.encode(buf, val.centerY);
+                ByteBufCodecs.DOUBLE.encode(buf, val.centerZ);
+                ByteBufCodecs.FLOAT.encode(buf, val.avx);
+                ByteBufCodecs.FLOAT.encode(buf, val.avy);
+                ByteBufCodecs.FLOAT.encode(buf, val.avz);
                 ByteBufCodecs.VAR_INT.encode(buf, val.boxes.size());
                 for (AABB box : val.boxes) {
                     writeAABB(buf, box);
@@ -32,12 +40,18 @@ public record DynamicColliderSyncPacket(ResourceLocation dimensionId, long bodyI
             (ByteBuf buf) -> {
                 ResourceLocation dim = ResourceLocation.parse(ByteBufCodecs.STRING_UTF8.decode(buf));
                 long id = ByteBufCodecs.VAR_LONG.decode(buf);
+                double cx = buf.readDouble();
+                double cy = buf.readDouble();
+                double cz = buf.readDouble();
+                float avx = buf.readFloat();
+                float avy = buf.readFloat();
+                float avz = buf.readFloat();
                 int size = ByteBufCodecs.VAR_INT.decode(buf);
                 List<AABB> boxes = new ArrayList<>(size);
                 for (int i = 0; i < size; i++) {
                     boxes.add(readAABB(buf));
                 }
-                return new DynamicColliderSyncPacket(dim, id, boxes);
+                return new DynamicColliderSyncPacket(dim, id, boxes, cx, cy, cz, avx, avy, avz);
             });
 
     private static void writeAABB(ByteBuf buf, AABB box) {
@@ -64,7 +78,10 @@ public record DynamicColliderSyncPacket(ResourceLocation dimensionId, long bodyI
     public static void handle(DynamicColliderSyncPacket payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             ResourceKey<net.minecraft.world.level.Level> dimKey = ResourceKey.create(Registries.DIMENSION, payload.dimensionId);
-            PhysicsColliderManager.registerDynamicBody(dimKey, payload.bodyId, payload.boxes);
+            org.joml.Vector3f center = new org.joml.Vector3f((float) payload.centerX, (float) payload.centerY, (float) payload.centerZ);
+            PhysicsColliderManager.registerDynamicBody(dimKey, payload.bodyId, payload.boxes, center);
+            PhysicsColliderManager.updateBodyState(payload.bodyId, (float)payload.centerX, (float)payload.centerY, (float)payload.centerZ, 
+                    new org.joml.Quaternionf(), 0, 0, 0, payload.avx, payload.avy, payload.avz);
         });
     }
 }

@@ -20,6 +20,8 @@ public class NativePhysicsEngine {
     private static boolean libraryLoaded = false;
     private static volatile boolean updateShapeAvailable = true;
     private static volatile boolean updateShapeWarningLogged = false;
+    private static volatile boolean bodyMaterialAvailable = true;
+    private static volatile boolean bodyMaterialWarningLogged = false;
     private long worldPointer = 0;
 
     // Native methods - implemented in C++
@@ -27,11 +29,16 @@ public class NativePhysicsEngine {
     private static native void nativeSetGravity(long worldPtr, float x, float y, float z);
     private static native void nativeStepPhysics(long worldPtr, float deltaTime);
     private static native long nativeCreateRigidBody(long worldPtr, float[] mins, float[] maxs, int boxCount, float mass);
+    private static native long nativeCreateRigidBodyWithProperties(long worldPtr, float[] mins, float[] maxs, int boxCount,
+                                                                    float mass, float friction, float restitution,
+                                                                    float linearDamping, float angularDamping);
     private static native long nativeCreateStaticBody(long worldPtr, float[] mins, float[] maxs, int boxCount);
     private static native void nativeGetBodyState(long worldPtr, long bodyId, float[] outState);
     private static native void nativeApplyForce(long worldPtr, long bodyId, float fx, float fy, float fz);
     private static native void nativeActivateBody(long worldPtr, long bodyId);
     private static native void nativeUpdateBodyShape(long worldPtr, long bodyId, float[] mins, float[] maxs, int boxCount);
+    private static native void nativeSetBodyMaterial(long worldPtr, long bodyId, float friction, float restitution,
+                                                     float linearDamping, float angularDamping);
     private static native void nativeRemoveBody(long worldPtr, long bodyId);
     private static native void nativeCleanupPhysicsWorld(long worldPtr);
 
@@ -120,6 +127,52 @@ public class NativePhysicsEngine {
         return nativeCreateRigidBody(worldPointer, mins, maxs, count, mass);
     }
 
+    public synchronized long createRigidBody(List<AABB> boxes, com.example.planetmapper.physics.structure.StructurePhysicsProperties.MaterialSummary material) {
+        if (material == null) {
+            return createRigidBody(boxes, 1.0f);
+        }
+        if (worldPointer == 0) return -1;
+
+        int count = boxes.size();
+        float[] mins = new float[count * 3];
+        float[] maxs = new float[count * 3];
+
+        for (int i = 0; i < count; i++) {
+            AABB box = boxes.get(i);
+            int offset = i * 3;
+            mins[offset] = (float) box.minX;
+            mins[offset + 1] = (float) box.minY;
+            mins[offset + 2] = (float) box.minZ;
+
+            maxs[offset] = (float) box.maxX;
+            maxs[offset + 1] = (float) box.maxY;
+            maxs[offset + 2] = (float) box.maxZ;
+        }
+
+        float mass = Math.max(1.0f, material.mass());
+        if (bodyMaterialAvailable) {
+            try {
+                long bodyId = nativeCreateRigidBodyWithProperties(worldPointer, mins, maxs, count, mass,
+                        material.friction(), material.restitution(), material.linearDamping(), material.angularDamping());
+                if (bodyId > 0) {
+                    return bodyId;
+                }
+            } catch (UnsatisfiedLinkError e) {
+                bodyMaterialAvailable = false;
+                if (!bodyMaterialWarningLogged) {
+                    bodyMaterialWarningLogged = true;
+                    PlanetMapper.LOGGER.warn("nativeCreateRigidBodyWithProperties missing in native_physics.dll. Using default material.", e);
+                }
+            }
+        }
+
+        long bodyId = nativeCreateRigidBody(worldPointer, mins, maxs, count, mass);
+        if (bodyId > 0) {
+            setBodyMaterial(bodyId, material);
+        }
+        return bodyId;
+    }
+
     /**
      * Creates a static rigid body from a set of AABBs.
      */
@@ -164,6 +217,25 @@ public class NativePhysicsEngine {
     public synchronized void activateBody(long bodyId) {
         if (worldPointer != 0) {
             nativeActivateBody(worldPointer, bodyId);
+        }
+    }
+
+    public synchronized void setBodyMaterial(long bodyId, com.example.planetmapper.physics.structure.StructurePhysicsProperties.MaterialSummary material) {
+        if (worldPointer == 0 || material == null || bodyId <= 0) {
+            return;
+        }
+        if (!bodyMaterialAvailable) {
+            return;
+        }
+        try {
+            nativeSetBodyMaterial(worldPointer, bodyId, material.friction(), material.restitution(),
+                    material.linearDamping(), material.angularDamping());
+        } catch (UnsatisfiedLinkError e) {
+            bodyMaterialAvailable = false;
+            if (!bodyMaterialWarningLogged) {
+                bodyMaterialWarningLogged = true;
+                PlanetMapper.LOGGER.warn("nativeSetBodyMaterial missing in native_physics.dll. Material updates disabled.", e);
+            }
         }
     }
 

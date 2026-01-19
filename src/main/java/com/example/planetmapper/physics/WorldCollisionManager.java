@@ -31,6 +31,7 @@ public class WorldCollisionManager {
     private static final Map<ResourceKey<Level>, Long2ObjectOpenHashMap<ChunkBuildTask>> TASKS = new HashMap<>();
     private static final Map<ResourceKey<Level>, Long2LongOpenHashMap> DIRTY_CHUNKS = new HashMap<>();
     private static final Map<ResourceKey<Level>, LongOpenHashSet> PRIORITY_CHUNKS = new HashMap<>();
+    private static final Map<ResourceKey<Level>, ServerLevel> LEVEL_IDENTITY = new HashMap<>();
     private static final Object EXECUTOR_LOCK = new Object();
     private static ExecutorService optimizerExecutor = createExecutor();
     private static volatile boolean acceptingTasks = true;
@@ -45,6 +46,7 @@ public class WorldCollisionManager {
         if (!PhysicsWorldManager.isNativeAvailable()) {
             return;
         }
+        ensureLevelIdentity(level);
         scheduleChunkBuild(level, chunk.getPos(), false, false);
     }
 
@@ -55,6 +57,7 @@ public class WorldCollisionManager {
         if (!PhysicsWorldManager.isNativeAvailable()) {
             return;
         }
+        ensureLevelIdentity(level);
         long key = chunk.getPos().toLong();
 
         Long2ObjectOpenHashMap<ChunkBuildTask> tasks = TASKS.get(level.dimension());
@@ -92,6 +95,7 @@ public class WorldCollisionManager {
         if (!PhysicsWorldManager.isNativeAvailable()) {
             return;
         }
+        ensureLevelIdentity(level);
         Long2ObjectOpenHashMap<ChunkBuildTask> tasks = TASKS.computeIfAbsent(level.dimension(), d -> new Long2ObjectOpenHashMap<>());
         processDirtyChunks(level, tasks);
 
@@ -150,6 +154,7 @@ public class WorldCollisionManager {
         CHUNK_BODIES.clear();
         DIRTY_CHUNKS.clear();
         PRIORITY_CHUNKS.clear();
+        LEVEL_IDENTITY.clear();
     }
 
     public static void reset() {
@@ -165,18 +170,36 @@ public class WorldCollisionManager {
         if (!acceptingTasks || !PhysicsWorldManager.isNativeAvailable()) {
             return;
         }
+        ensureLevelIdentity(level);
         long key = chunkPos.toLong();
         long dueTime = level.getGameTime() + Config.PHYSICS_COLLISION_REBUILD_DELAY_TICKS.get();
-        Long2LongOpenHashMap dirty = DIRTY_CHUNKS.computeIfAbsent(level.dimension(), d -> new Long2LongOpenHashMap());
-        dirty.put(key, dueTime);
+        markChunkDirty(level, key, dueTime, false);
+    }
+
+    public static void markChunkDirtyNow(ServerLevel level, ChunkPos chunkPos) {
+        if (!acceptingTasks || !PhysicsWorldManager.isNativeAvailable()) {
+            return;
+        }
+        ensureLevelIdentity(level);
+        long key = chunkPos.toLong();
+        long dueTime = level.getGameTime();
+        markChunkDirty(level, key, dueTime, true);
+    }
+
+    public static boolean isChunkDirty(ServerLevel level, ChunkPos chunkPos) {
+        ensureLevelIdentity(level);
+        Long2LongOpenHashMap dirty = DIRTY_CHUNKS.get(level.dimension());
+        return dirty != null && dirty.containsKey(chunkPos.toLong());
     }
 
     public static boolean isChunkColliderReady(ServerLevel level, ChunkPos chunkPos) {
+        ensureLevelIdentity(level);
         Long2LongOpenHashMap bodies = CHUNK_BODIES.get(level.dimension());
         return bodies != null && bodies.containsKey(chunkPos.toLong());
     }
 
     public static void ensureChunkCollider(ServerLevel level, ChunkPos chunkPos) {
+        ensureLevelIdentity(level);
         scheduleChunkBuild(level, chunkPos, false, true);
     }
 
@@ -195,6 +218,40 @@ public class WorldCollisionManager {
             t.setDaemon(true);
             return t;
         });
+    }
+
+    private static void ensureLevelIdentity(ServerLevel level) {
+        ResourceKey<Level> dimension = level.dimension();
+        ServerLevel current = LEVEL_IDENTITY.get(dimension);
+        if (current == level) {
+            return;
+        }
+        clearDimension(level, dimension);
+        LEVEL_IDENTITY.put(dimension, level);
+    }
+
+    private static void clearDimension(ServerLevel level, ResourceKey<Level> dimension) {
+        Long2LongOpenHashMap bodies = CHUNK_BODIES.remove(dimension);
+        if (bodies != null && !bodies.isEmpty()) {
+            NativePhysicsEngine engine = PhysicsWorldManager.getEngine();
+            if (engine != null) {
+                LongIterator iterator = bodies.values().iterator();
+                while (iterator.hasNext()) {
+                    engine.removeBody(iterator.nextLong());
+                }
+            }
+        }
+        TASKS.remove(dimension);
+        DIRTY_CHUNKS.remove(dimension);
+        PRIORITY_CHUNKS.remove(dimension);
+    }
+
+    private static void markChunkDirty(ServerLevel level, long key, long dueTime, boolean priority) {
+        Long2LongOpenHashMap dirty = DIRTY_CHUNKS.computeIfAbsent(level.dimension(), d -> new Long2LongOpenHashMap());
+        dirty.put(key, dueTime);
+        if (priority) {
+            markPriority(level, key);
+        }
     }
 
     private static void startOptimization(ServerLevel level, ChunkBuildTask task) {

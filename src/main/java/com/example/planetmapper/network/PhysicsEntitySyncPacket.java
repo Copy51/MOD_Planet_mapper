@@ -13,7 +13,10 @@ import net.minecraft.world.entity.Entity;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 import org.joml.Quaternionf;
 
-public record PhysicsEntitySyncPacket(int entityId, long bodyId, double x, double y, double z, float qx, float qy, float qz, float qw) implements CustomPacketPayload {
+public record PhysicsEntitySyncPacket(int entityId, long bodyId, double x, double y, double z,
+                                      float qx, float qy, float qz, float qw,
+                                      float vx, float vy, float vz,
+                                      float avx, float avy, float avz) implements CustomPacketPayload {
 
     public static final Type<PhysicsEntitySyncPacket> TYPE = new Type<>(
             ResourceLocation.fromNamespaceAndPath(PlanetMapper.MODID, "sync_physics_entity"));
@@ -29,6 +32,12 @@ public record PhysicsEntitySyncPacket(int entityId, long bodyId, double x, doubl
                 ByteBufCodecs.FLOAT.encode(buf, val.qy);
                 ByteBufCodecs.FLOAT.encode(buf, val.qz);
                 ByteBufCodecs.FLOAT.encode(buf, val.qw);
+                ByteBufCodecs.FLOAT.encode(buf, val.vx);
+                ByteBufCodecs.FLOAT.encode(buf, val.vy);
+                ByteBufCodecs.FLOAT.encode(buf, val.vz);
+                ByteBufCodecs.FLOAT.encode(buf, val.avx);
+                ByteBufCodecs.FLOAT.encode(buf, val.avy);
+                ByteBufCodecs.FLOAT.encode(buf, val.avz);
             },
             (ByteBuf buf) -> new PhysicsEntitySyncPacket(
                     ByteBufCodecs.VAR_INT.decode(buf),
@@ -36,6 +45,12 @@ public record PhysicsEntitySyncPacket(int entityId, long bodyId, double x, doubl
                     ByteBufCodecs.DOUBLE.decode(buf),
                     ByteBufCodecs.DOUBLE.decode(buf),
                     ByteBufCodecs.DOUBLE.decode(buf),
+                    ByteBufCodecs.FLOAT.decode(buf),
+                    ByteBufCodecs.FLOAT.decode(buf),
+                    ByteBufCodecs.FLOAT.decode(buf),
+                    ByteBufCodecs.FLOAT.decode(buf),
+                    ByteBufCodecs.FLOAT.decode(buf),
+                    ByteBufCodecs.FLOAT.decode(buf),
                     ByteBufCodecs.FLOAT.decode(buf),
                     ByteBufCodecs.FLOAT.decode(buf),
                     ByteBufCodecs.FLOAT.decode(buf),
@@ -57,7 +72,8 @@ public record PhysicsEntitySyncPacket(int entityId, long bodyId, double x, doubl
                     physicsEntity.updateFromPacket(payload.x, payload.y, payload.z, rot);
                     
                     // Also update the static collision body on the client so the player doesn't phase/jitter
-                    PhysicsColliderManager.updateBodyTransform(payload.bodyId, (float)payload.x, (float)payload.y, (float)payload.z, rot);
+                    PhysicsColliderManager.updateBodyState(payload.bodyId, (float) payload.x, (float) payload.y, (float) payload.z,
+                            rot, payload.vx, payload.vy, payload.vz, payload.avx, payload.avy, payload.avz);
                 }
             }
         });

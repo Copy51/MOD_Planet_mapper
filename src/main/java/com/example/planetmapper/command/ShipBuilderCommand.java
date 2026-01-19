@@ -4,6 +4,7 @@ import com.example.planetmapper.entity.PhysicsStructureEntity;
 import com.example.planetmapper.physics.NativePhysicsEngine;
 import com.example.planetmapper.physics.PhysicsColliderManager;
 import com.example.planetmapper.physics.PhysicsWorldManager;
+import com.example.planetmapper.physics.structure.StructurePhysicsProperties;
 import com.example.planetmapper.util.StructureScanner;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
@@ -49,17 +50,21 @@ public class ShipBuilderCommand {
             
             // Create Rigid Body
             NativePhysicsEngine engine = PhysicsWorldManager.getEngine();
-            // Estimate mass: 10 per block
-            float mass = result.blocks().size() * 10.0f;
+            StructurePhysicsProperties physicsProperties = new StructurePhysicsProperties();
+            for (BlockState state : result.blocks().values()) {
+                physicsProperties.addState(state);
+            }
+            StructurePhysicsProperties.MaterialSummary material = physicsProperties.snapshot();
             
-            long bodyId = engine.createRigidBody(aabbs, mass);
+            long bodyId = engine.createRigidBody(aabbs, material);
             if (bodyId <= 0) {
                 source.sendFailure(Component.literal("Failed to create physics body."));
                 return 0;
             }
 
             // Register body
-            PhysicsColliderManager.registerAndSyncBody(source.getLevel(), bodyId, aabbs);
+            PhysicsColliderManager.registerAndSyncBody(source.getLevel(), bodyId, aabbs,
+                new org.joml.Vector3f((float)result.center().getX() + 0.5f, (float)result.center().getY(), (float)result.center().getZ() + 0.5f));
 
             // Create Entity
             PhysicsStructureEntity entity = com.example.planetmapper.entity.ModEntities.PHYSICS_STRUCTURE.get().create(source.getLevel());

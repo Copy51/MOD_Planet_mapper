@@ -24,7 +24,7 @@ public class PhysicsBlockRenderer extends EntityRenderer<PhysicsBlockEntity> {
 
         // Apply rotation from physics engine (Quaternion)
         // Physics center is 0.5 blocks above the entity's feet (setPos position)
-        poseStack.translate(0, 0.5, 0); 
+        poseStack.translate(0, entity.getBodyYOffset(), 0); 
         poseStack.mulPose(entity.getPhysicsRotation(partialTick));
         
         // Move back to corner to render 1x1x1 block

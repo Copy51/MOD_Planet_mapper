@@ -58,6 +58,17 @@ public class ImmersivePortalsHandler {
         }
 
         MinecraftServer server = event.getServer();
+        if (!Config.WORLD_WRAP_ENABLED.get()) {
+            try {
+                server.getCommands().performPrefixedCommand(server.createCommandSourceStack(),
+                        "portal global clear_wrapping_border");
+                PlanetMapper.LOGGER.info("Seamless world borders disabled.");
+            } catch (Exception e) {
+                PlanetMapper.LOGGER.error("Failed to clear Immersive Portals wrapping", e);
+            }
+            alreadyConfigured = true;
+            return;
+        }
         int radius = Config.WORLD_RADIUS.get();
 
         String command = String.format("portal global create_inward_wrapping %d %d %d %d",
@@ -297,17 +308,19 @@ public class ImmersivePortalsHandler {
                               ResourceKey<Level> destKey, Vec3 originPos, Vec3 axisW, Vec3 axisH, Vec3 destPos,
                               DQuaternion rotation, double scale, double width, double height) {
         Portal spacePortal = pair.spacePortal;
+        boolean spawnSpacePortal = false;
         if (spacePortal == null || spacePortal.isRemoved()) {
             spacePortal = new Portal(Portal.ENTITY_TYPE, spaceLevel);
-            PortalAPI.spawnServerEntity(spacePortal);
             pair.spacePortal = spacePortal;
+            spawnSpacePortal = true;
         }
 
         Portal surfacePortal = pair.surfacePortal;
+        boolean spawnSurfacePortal = false;
         if (surfacePortal == null || surfacePortal.isRemoved()) {
             surfacePortal = new Portal(Portal.ENTITY_TYPE, destLevel);
-            PortalAPI.spawnServerEntity(surfacePortal);
             pair.surfacePortal = surfacePortal;
+            spawnSurfacePortal = true;
         }
 
         configurePortal(spacePortal, player, originPos, axisW, axisH, destKey, destPos, rotation, scale, width, height);
@@ -319,6 +332,14 @@ public class ImmersivePortalsHandler {
         configurePortal(surfacePortal, player, destPos, destAxisW, destAxisH, PlanetMapper.SPACE_LEVEL, originPos,
                 rotation.getConjugated(), 1.0 / Math.max(1.0e-6, scale), destWidth, destHeight);
 
+        if (spawnSpacePortal) {
+            PortalAPI.spawnServerEntity(spacePortal);
+        }
+        if (spawnSurfacePortal) {
+            PortalAPI.spawnServerEntity(surfacePortal);
+        }
+        spacePortal.reloadAndSyncToClientNextTick();
+        surfacePortal.reloadAndSyncToClientNextTick();
     }
 
     private void configurePortal(Portal portal, ServerPlayer player, Vec3 originPos, Vec3 axisW, Vec3 axisH,
@@ -331,7 +352,6 @@ public class ImmersivePortalsHandler {
         portal.setTeleportable(true);
         portal.setFuseView(true);
         portal.specificPlayerId = player.getUUID();
-        portal.reloadAndSyncToClientNextTick();
     }
 
     private void removePortalPair(UUID playerId, ServerPlayer player) {

@@ -8,8 +8,10 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Collision/Shape/MutableCompoundShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
@@ -159,6 +161,113 @@ private:
 
 std::atomic<int> PhysicsWorld::s_worldCount{0};
 
+static JPH::Vec3 ComputeWeightedCenter(const jfloat* minData, const jfloat* maxData, int boxCount) {
+    float minX = minData[0];
+    float minY = minData[1];
+    float minZ = minData[2];
+    float maxX = maxData[0];
+    float maxY = maxData[1];
+    float maxZ = maxData[2];
+
+    double sumVolume = 0.0;
+    double sumX = 0.0;
+    double sumY = 0.0;
+    double sumZ = 0.0;
+
+    for (int i = 0; i < boxCount; ++i) {
+        int offset = i * 3;
+        float mnx = minData[offset];
+        float mny = minData[offset + 1];
+        float mnz = minData[offset + 2];
+        float mxx = maxData[offset];
+        float mxy = maxData[offset + 1];
+        float mxz = maxData[offset + 2];
+
+        minX = std::min(minX, mnx);
+        minY = std::min(minY, mny);
+        minZ = std::min(minZ, mnz);
+        maxX = std::max(maxX, mxx);
+        maxY = std::max(maxY, mxy);
+        maxZ = std::max(maxZ, mxz);
+
+        float sizeX = mxx - mnx;
+        float sizeY = mxy - mny;
+        float sizeZ = mxz - mnz;
+        if (sizeX <= 0.0f || sizeY <= 0.0f || sizeZ <= 0.0f) {
+            continue;
+        }
+        double volume = static_cast<double>(sizeX) * sizeY * sizeZ;
+        float cx = (mnx + mxx) * 0.5f;
+        float cy = (mny + mxy) * 0.5f;
+        float cz = (mnz + mxz) * 0.5f;
+        sumVolume += volume;
+        sumX += static_cast<double>(cx) * volume;
+        sumY += static_cast<double>(cy) * volume;
+        sumZ += static_cast<double>(cz) * volume;
+    }
+
+    if (sumVolume > 0.0) {
+        return JPH::Vec3(static_cast<float>(sumX / sumVolume),
+                         static_cast<float>(sumY / sumVolume),
+                         static_cast<float>(sumZ / sumVolume));
+    }
+    return JPH::Vec3((minX + maxX) * 0.5f,
+                     (minY + maxY) * 0.5f,
+                     (minZ + maxZ) * 0.5f);
+}
+
+static constexpr float kDefaultFriction = 0.6f;
+static constexpr float kDefaultRestitution = 0.0f;
+static constexpr float kDefaultLinearDamping = 0.05f;
+static constexpr float kDefaultAngularDamping = 0.1f;
+
+static jlong CreateRigidBodyInternal(PhysicsWorld* pw,
+                                     const jfloat* minData,
+                                     const jfloat* maxData,
+                                     int boxCount,
+                                     float mass,
+                                     float friction,
+                                     float restitution,
+                                     float linearDamping,
+                                     float angularDamping) {
+    if (!pw || !pw->mPhysicsSystem || boxCount <= 0) {
+        return 0;
+    }
+
+    JPH::Vec3 bodyCenter = ComputeWeightedCenter(minData, maxData, boxCount);
+    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
+
+    JPH::MutableCompoundShapeSettings compoundSettings;
+    for (int i = 0; i < boxCount; ++i) {
+        int offset = i * 3;
+        JPH::Vec3 min(minData[offset], minData[offset + 1], minData[offset + 2]);
+        JPH::Vec3 max(maxData[offset], maxData[offset + 1], maxData[offset + 2]);
+
+        JPH::Vec3 center = (min + max) * 0.5f;
+        JPH::Vec3 halfExtent = (max - min) * 0.5f;
+        JPH::Vec3 localCenter = center - bodyCenter;
+        compoundSettings.AddShape(localCenter, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent), i);
+    }
+
+    JPH::ShapeSettings::ShapeResult result = compoundSettings.Create();
+    if (result.HasError()) return 0;
+
+    JPH::BodyCreationSettings settings(result.Get(), bodyCenter, JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
+    settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+    settings.mMassPropertiesOverride.mMass = std::max(1.0f, mass);
+    settings.mFriction = friction;
+    settings.mRestitution = restitution;
+    settings.mLinearDamping = linearDamping;
+    settings.mAngularDamping = angularDamping;
+    settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
+    settings.mAllowSleeping = true;
+
+    JPH::Body* body = bi.CreateBody(settings);
+    bi.AddBody(body->GetID(), JPH::EActivation::Activate);
+
+    return static_cast<jlong>(body->GetID().GetIndexAndSequenceNumber());
+}
+
 // JNI functions
 // Note: JNI function names follow the pattern: Java_packagename_ClassName_methodName
 // Package: com.example.planetmapper.physics
@@ -196,54 +305,34 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
         return 0;
     }
 
-    float minX = minData[0];
-    float minY = minData[1];
-    float minZ = minData[2];
-    float maxX = maxData[0];
-    float maxY = maxData[1];
-    float maxZ = maxData[2];
-
-    for (int i = 1; i < boxCount; ++i) {
-        int offset = i * 3;
-        minX = std::min(minX, minData[offset]);
-        minY = std::min(minY, minData[offset + 1]);
-        minZ = std::min(minZ, minData[offset + 2]);
-        maxX = std::max(maxX, maxData[offset]);
-        maxY = std::max(maxY, maxData[offset + 1]);
-        maxZ = std::max(maxZ, maxData[offset + 2]);
-    }
-
-    JPH::Vec3 bodyCenter((minX + maxX) * 0.5f, (minY + maxY) * 0.5f, (minZ + maxZ) * 0.5f);
-
-    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
-
-    JPH::StaticCompoundShapeSettings compoundSettings;
-    for (int i = 0; i < boxCount; ++i) {
-        int offset = i * 3;
-        JPH::Vec3 min(minData[offset], minData[offset+1], minData[offset+2]);
-        JPH::Vec3 max(maxData[offset], maxData[offset+1], maxData[offset+2]);
-        
-        JPH::Vec3 center = (min + max) * 0.5f;
-        JPH::Vec3 halfExtent = (max - min) * 0.5f;
-        JPH::Vec3 localCenter = center - bodyCenter;
-
-
-        compoundSettings.AddShape(localCenter, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent), i);
-    }
+    jlong bodyId = CreateRigidBodyInternal(pw, minData, maxData, boxCount, mass,
+            kDefaultFriction, kDefaultRestitution, kDefaultLinearDamping, kDefaultAngularDamping);
 
     env->ReleaseFloatArrayElements(mins, minData, 0);
     env->ReleaseFloatArrayElements(maxs, maxData, 0);
+    return bodyId;
+}
 
-    JPH::ShapeSettings::ShapeResult result = compoundSettings.Create();
-    if (result.HasError()) return 0;
+JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCreateRigidBodyWithProperties(
+    JNIEnv* env, jclass clazz, jlong worldPtr, jfloatArray mins, jfloatArray maxs, jint boxCount, jfloat mass,
+    jfloat friction, jfloat restitution, jfloat linearDamping, jfloat angularDamping) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw || !pw->mPhysicsSystem) return 0;
 
-    JPH::BodyCreationSettings settings(result.Get(), bodyCenter, JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
-    settings.mMassPropertiesOverride.mMass = mass;
+    jfloat* minData = env->GetFloatArrayElements(mins, nullptr);
+    jfloat* maxData = env->GetFloatArrayElements(maxs, nullptr);
+    if (!minData || !maxData || boxCount <= 0) {
+        if (minData) env->ReleaseFloatArrayElements(mins, minData, 0);
+        if (maxData) env->ReleaseFloatArrayElements(maxs, maxData, 0);
+        return 0;
+    }
 
-    JPH::Body* body = bi.CreateBody(settings);
-    bi.AddBody(body->GetID(), JPH::EActivation::Activate);
+    jlong bodyId = CreateRigidBodyInternal(pw, minData, maxData, boxCount, mass,
+            friction, restitution, linearDamping, angularDamping);
 
-    return static_cast<jlong>(body->GetID().GetIndexAndSequenceNumber());
+    env->ReleaseFloatArrayElements(mins, minData, 0);
+    env->ReleaseFloatArrayElements(maxs, maxData, 0);
+    return bodyId;
 }
 
 JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeCreateStaticBody(JNIEnv* env, jclass clazz, jlong worldPtr, jfloatArray mins, jfloatArray maxs, jint boxCount) {
@@ -258,24 +347,7 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
         return 0;
     }
 
-    float minX = minData[0];
-    float minY = minData[1];
-    float minZ = minData[2];
-    float maxX = maxData[0];
-    float maxY = maxData[1];
-    float maxZ = maxData[2];
-
-    for (int i = 1; i < boxCount; ++i) {
-        int offset = i * 3;
-        minX = std::min(minX, minData[offset]);
-        minY = std::min(minY, minData[offset + 1]);
-        minZ = std::min(minZ, minData[offset + 2]);
-        maxX = std::max(maxX, maxData[offset]);
-        maxY = std::max(maxY, maxData[offset + 1]);
-        maxZ = std::max(maxZ, maxData[offset + 2]);
-    }
-
-    JPH::Vec3 bodyCenter((minX + maxX) * 0.5f, (minY + maxY) * 0.5f, (minZ + maxZ) * 0.5f);
+    JPH::Vec3 bodyCenter = ComputeWeightedCenter(minData, maxData, boxCount);
 
     JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
     JPH::StaticCompoundShapeSettings compoundSettings;
@@ -299,6 +371,7 @@ JNIEXPORT jlong JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngin
     if (result.HasError()) return 0;
 
     JPH::BodyCreationSettings settings(result.Get(), bodyCenter, JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::STATIC);
+    settings.mFriction = 0.8f;
     JPH::Body* body = bi.CreateBody(settings);
     bi.AddBody(body->GetID(), JPH::EActivation::DontActivate);
 
@@ -310,14 +383,14 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
     if (!pw || !pw->mPhysicsSystem) return;
 
     JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
-    JPH::BodyInterface& bi = pw->mPhysicsSystem->GetBodyInterface();
+    JPH::BodyLockRead lock(pw->mPhysicsSystem->GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return;
+    const JPH::Body& body = lock.GetBody();
 
-    if (!bi.IsAdded(id)) return;
-
-    JPH::RVec3 pos = bi.GetPosition(id);
-    JPH::Quat rot = bi.GetRotation(id);
-    JPH::Vec3 vel = bi.GetLinearVelocity(id);
-    JPH::Vec3 angVel = bi.GetAngularVelocity(id);
+    JPH::RVec3 pos = body.GetPosition();
+    JPH::Quat rot = body.GetRotation();
+    JPH::Vec3 vel = body.GetLinearVelocity();
+    JPH::Vec3 angVel = body.GetAngularVelocity();
 
     jfloat state[13];
     state[0] = static_cast<jfloat>(pos.GetX());
@@ -356,6 +429,28 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
     }
 }
 
+JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeSetBodyMaterial(
+    JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId, jfloat friction, jfloat restitution,
+    jfloat linearDamping, jfloat angularDamping) {
+    auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
+    if (!pw || !pw->mPhysicsSystem) return;
+
+    JPH::BodyID id(static_cast<JPH::uint32>(bodyId));
+    JPH::BodyLockWrite lock(pw->mPhysicsSystem->GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return;
+
+    JPH::Body& body = lock.GetBody();
+    body.SetFriction(friction);
+    body.SetRestitution(restitution);
+
+    if (body.IsDynamic()) {
+        if (JPH::MotionProperties* motion = body.GetMotionProperties()) {
+            motion->SetLinearDamping(linearDamping);
+            motion->SetAngularDamping(angularDamping);
+        }
+    }
+}
+
 JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine_nativeUpdateBodyShape(JNIEnv* env, jclass clazz, jlong worldPtr, jlong bodyId, jfloatArray mins, jfloatArray maxs, jint boxCount) {
     auto* pw = reinterpret_cast<PhysicsWorld*>(worldPtr);
     if (!pw || !pw->mPhysicsSystem) return;
@@ -368,7 +463,7 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
         return;
     }
 
-    JPH::StaticCompoundShapeSettings compoundSettings;
+    JPH::MutableCompoundShapeSettings compoundSettings;
     for (int i = 0; i < boxCount; ++i) {
         int offset = i * 3;
         JPH::Vec3 min(minData[offset], minData[offset + 1], minData[offset + 2]);
@@ -376,7 +471,7 @@ JNIEXPORT void JNICALL Java_com_example_planetmapper_physics_NativePhysicsEngine
 
         JPH::Vec3 center = (min + max) * 0.5f;
         JPH::Vec3 halfExtent = (max - min) * 0.5f;
-        compoundSettings.AddShape(center, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent));
+        compoundSettings.AddShape(center, JPH::Quat::sIdentity(), new JPH::BoxShape(halfExtent), i);
     }
 
     env->ReleaseFloatArrayElements(mins, minData, 0);

@@ -5,6 +5,7 @@ import com.example.planetmapper.physics.PhysicsBodyEntityAdapter;
 import com.example.planetmapper.physics.PhysicsColliderManager;
 import com.example.planetmapper.physics.PhysicsWorldManager;
 import com.example.planetmapper.physics.WorldCollisionManager;
+import com.example.planetmapper.physics.structure.StructurePhysicsProperties;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.core.BlockPos;
@@ -54,13 +55,17 @@ public class PhysicsTestCommand {
                 pos.x + 0.5, pos.y + 1.0, pos.z + 0.5
             );
             
-            long bodyId = engine.createRigidBody(Collections.singletonList(box), 10.0f);
+            StructurePhysicsProperties physicsProperties = new StructurePhysicsProperties();
+            physicsProperties.addState(Blocks.STONE.defaultBlockState());
+            StructurePhysicsProperties.MaterialSummary material = physicsProperties.snapshot();
+            long bodyId = engine.createRigidBody(Collections.singletonList(box), material);
             if (bodyId <= 0) {
                 source.sendFailure(Component.literal("Failed to create physics body."));
                 return 0;
             }
 
-            PhysicsColliderManager.registerAndSyncBody(source.getLevel(), bodyId, Collections.singletonList(box));
+            PhysicsColliderManager.registerAndSyncBody(source.getLevel(), bodyId, Collections.singletonList(box), 
+                new org.joml.Vector3f((float)box.getCenter().x, (float)box.getCenter().y, (float)box.getCenter().z));
 
             com.example.planetmapper.entity.PhysicsBlockEntity physicsEntity = com.example.planetmapper.entity.ModEntities.PHYSICS_BLOCK.get().create(source.getLevel());
             if (physicsEntity == null) {
@@ -69,7 +74,7 @@ public class PhysicsTestCommand {
             }
 
             // Spawn at feet position (center - 0.5) to match physics offset
-            physicsEntity.setPos(pos.x, pos.y - 0.5, pos.z);
+            physicsEntity.setPos(pos.x, pos.y + 0.5 - physicsEntity.getBodyYOffset(), pos.z);
             physicsEntity.setBodyId(bodyId);
             source.getLevel().addFreshEntity(physicsEntity);
             PhysicsWorldManager.registerEntity(physicsEntity);

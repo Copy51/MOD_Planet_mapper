@@ -3,10 +3,12 @@ package com.example.planetmapper.entity;
 import com.example.planetmapper.physics.PhysicsBodyEntity;
 import com.example.planetmapper.physics.PhysicsWorldManager;
 import com.example.planetmapper.physics.NativePhysicsEngine;
+import com.example.planetmapper.shipyard.ShipyardManager;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.util.Mth;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
@@ -25,11 +27,16 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
     private final float[] stateBuffer = new float[13];
     private final Quaternionf rotation = new Quaternionf();
     private final Quaternionf prevRotation = new Quaternionf();
+    private final Quaternionf targetRotation = new Quaternionf();
+    private final Vector3f targetPosition = new Vector3f();
+    private boolean clientHasTarget = false;
+    private boolean clientFirstUpdate = true;
     private boolean firstTick = true;
 
     // Last sent state to avoid spamming packets
-    private final Vector3f lastSentPos = new Vector3f();
-    private final Quaternionf lastSentRot = new Quaternionf();
+    protected final Vector3f lastSentPos = new Vector3f();
+    protected final Quaternionf lastSentRot = new Quaternionf();
+    protected final Vector3f angularVelocity = new Vector3f();
 
     public PhysicsBlockEntity(EntityType<?> entityType, Level level) {
         super(entityType, level);
@@ -38,7 +45,19 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
     @Override
     public void tick() {
         if (this.level().isClientSide) {
-            prevRotation.set(rotation);
+            prevRotation.set(rotation); // Keep this for interpolation
+            applyClientInterpolation();
+            // Update collider with current interpolated transform
+            long id = getBodyId();
+            if (id > 0) {
+                com.example.planetmapper.physics.PhysicsColliderManager.updateBodyState(
+                    id, (float)getX(), (float)getY(), (float)getZ(), rotation, 
+                    (float)getDeltaMovement().x, (float)getDeltaMovement().y, (float)getDeltaMovement().z,
+                    this.angularVelocity.x, this.angularVelocity.y, this.angularVelocity.z
+                );
+            }
+        } else {
+            updateStateFromNative();
         }
         super.tick();
     }
@@ -66,7 +85,7 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
 
     @Override
     public boolean canBeCollidedWith() {
-        return true;
+        return false;
     }
 
     @Override
@@ -76,7 +95,11 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
 
     @Override
     public boolean hurt(DamageSource source, float amount) {
-        if (!this.level().isClientSide && !this.isRemoved()) {
+        if (this.level().isClientSide || this.isRemoved()) {
+            return false;
+        }
+        Entity attacker = source.getEntity();
+        if (attacker instanceof net.minecraft.world.entity.player.Player) {
             this.remove(RemovalReason.KILLED);
             return true;
         }
@@ -93,16 +116,35 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
                  com.example.planetmapper.physics.structure.StructurePhysicsManager.unregisterStructure(id);
                  if (this.level() instanceof net.minecraft.server.level.ServerLevel serverLevel) {
                      com.example.planetmapper.physics.PhysicsColliderManager.unregisterAndSyncBody(serverLevel, id);
+                     net.minecraft.server.level.ServerLevel shipyard = ShipyardManager.getShipyardLevel(serverLevel.getServer());
+                     ShipyardManager.removeRegion(shipyard, id);
                  }
              }
-        }
+         }
     }
     
     public void updateFromPacket(double x, double y, double z, Quaternionf rot) {
-        // Update interpolation targets
-        // IMPORTANT: Move feet position to center - 0.5 to align with physics
-        this.setPos(x, y - 0.5, z);
+        if (this.level().isClientSide) {
+            float yOffset = getBodyYOffset();
+            targetPosition.set((float) x, (float) (y - yOffset), (float) z);
+            targetRotation.set(rot);
+            clientHasTarget = true;
+            if (clientFirstUpdate) {
+                this.setPos(targetPosition.x, targetPosition.y, targetPosition.z);
+                this.rotation.set(targetRotation);
+                prevRotation.set(rotation);
+                clientFirstUpdate = false;
+            }
+            return;
+        }
+        float yOffset = getBodyYOffset();
+        this.setPos(x, y - yOffset, z);
         this.rotation.set(rot);
+    }
+
+    public void updateFromPacket(double x, double y, double z, Quaternionf rot, float avx, float avy, float avz) {
+        updateFromPacket(x, y, z, rot);
+        this.angularVelocity.set(avx, avy, avz);
     }
 
     @Override
@@ -116,18 +158,22 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
             engine.getBodyState(id, stateBuffer);
             
             // Sync Position (Center of Mass -> Feet)
-            float px = stateBuffer[0];
-            float py = stateBuffer[1] - 0.5f;
-            float pz = stateBuffer[2];
-            this.setPos(px, py, pz);
+            float cx = stateBuffer[0];
+            float cy = stateBuffer[1];
+            float cz = stateBuffer[2];
+            float yOffset = getBodyYOffset();
+            this.setPos(cx, cy - yOffset, cz);
             
             // Sync Rotation
             rotation.set(stateBuffer[3], stateBuffer[4], stateBuffer[5], stateBuffer[6]);
             
+            // Capture Angular Velocity
+            angularVelocity.set(stateBuffer[10], stateBuffer[11], stateBuffer[12]);
+            
             // Send Packet if changed significantly
-            if (firstTick || shouldSendUpdate(px, py, pz, rotation)) {
-                sendSyncPacket(px, py, pz, rotation);
-                lastSentPos.set(px, py, pz);
+            if (firstTick || shouldSendUpdate(cx, cy, cz, rotation)) {
+                sendSyncPacket(cx, cy, cz, rotation, stateBuffer[7], stateBuffer[8], stateBuffer[9], stateBuffer[10], stateBuffer[11], stateBuffer[12]);
+                lastSentPos.set(cx, cy, cz);
                 lastSentRot.set(rotation);
                 firstTick = false;
             }
@@ -142,11 +188,11 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
         return Math.abs(dot) < 0.9999f; // Significant rotation change
     }
     
-    private void sendSyncPacket(float px, float py, float pz, Quaternionf rot) {
+    private void sendSyncPacket(float px, float py, float pz, Quaternionf rot, float vx, float vy, float vz, float avx, float avy, float avz) {
         net.neoforged.neoforge.network.PacketDistributor.sendToPlayersTrackingEntityAndSelf(
             this,
             new com.example.planetmapper.network.PhysicsEntitySyncPacket(
-                this.getId(), getBodyId(), px, py, pz, rot.x, rot.y, rot.z, rot.w
+                this.getId(), getBodyId(), px, py, pz, rot.x, rot.y, rot.z, rot.w, vx, vy, vz, avx, avy, avz
             )
         );
     }
@@ -159,6 +205,33 @@ public class PhysicsBlockEntity extends Entity implements PhysicsBodyEntity {
     // Deprecated single-param getter
     public Quaternionf getPhysicsRotation() {
         return rotation;
+    }
+
+    public float getBodyYOffset() {
+        return 0.5f;
+    }
+
+    private void applyClientInterpolation() {
+        if (!clientHasTarget) {
+            return;
+        }
+        double dx = targetPosition.x - this.getX();
+        double dy = targetPosition.y - this.getY();
+        double dz = targetPosition.z - this.getZ();
+        double distSqr = dx * dx + dy * dy + dz * dz;
+
+        if (distSqr > 9.0) {
+            this.setPos(targetPosition.x, targetPosition.y, targetPosition.z);
+            this.rotation.set(targetRotation);
+            return;
+        }
+
+        float alpha = 0.5f; // Faster response
+        double nx = Mth.lerp(alpha, this.getX(), targetPosition.x);
+        double ny = Mth.lerp(alpha, this.getY(), targetPosition.y);
+        double nz = Mth.lerp(alpha, this.getZ(), targetPosition.z);
+        this.setPos(nx, ny, nz);
+        this.rotation.slerp(targetRotation, alpha);
     }
     @Override
     public net.minecraft.world.phys.HitResult pick(double hitDist, float partialTicks, boolean screen) {

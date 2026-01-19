@@ -2,6 +2,7 @@ package com.example.planetmapper.physics.structure;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
@@ -18,6 +19,8 @@ public class PhysicsStructure {
     private final Vector3f originOffset;
     private final Long2ObjectOpenHashMap<StructureBlockData> blocks;
     private final LongOpenHashSet collidableBlocks;
+    private final StructurePhysicsProperties physicsProperties;
+    private int entityId;
     private final float[] stateBuffer = new float[13];
     private final AtomicBoolean dirty = new AtomicBoolean(false);
     private final AtomicBoolean rebuildRunning = new AtomicBoolean(false);
@@ -27,13 +30,15 @@ public class PhysicsStructure {
                             BlockPos origin,
                             Vector3f originOffset,
                             Long2ObjectOpenHashMap<StructureBlockData> blocks,
-                            LongOpenHashSet collidableBlocks) {
+                            LongOpenHashSet collidableBlocks,
+                            StructurePhysicsProperties physicsProperties) {
         this.dimension = dimension;
         this.bodyId = bodyId;
         this.origin = origin;
         this.originOffset = originOffset;
         this.blocks = blocks;
         this.collidableBlocks = collidableBlocks;
+        this.physicsProperties = physicsProperties;
     }
 
     public ResourceKey<Level> getDimension() {
@@ -42,6 +47,14 @@ public class PhysicsStructure {
 
     public long getBodyId() {
         return bodyId;
+    }
+
+    public int getEntityId() {
+        return entityId;
+    }
+
+    public void setEntityId(int entityId) {
+        this.entityId = entityId;
     }
 
     public BlockPos getOrigin() {
@@ -54,6 +67,10 @@ public class PhysicsStructure {
 
     public Long2ObjectOpenHashMap<StructureBlockData> getBlocks() {
         return blocks;
+    }
+
+    public StructurePhysicsProperties getPhysicsProperties() {
+        return physicsProperties;
     }
 
     public LongOpenHashSet snapshotCollidableBlocks() {
@@ -70,6 +87,13 @@ public class PhysicsStructure {
             collidableBlocks.remove(localKey);
         }
         return data;
+    }
+
+    public void putBlock(long localKey, StructureBlockData data) {
+        blocks.put(localKey, data);
+        if (data.collidable()) {
+            collidableBlocks.add(localKey);
+        }
     }
 
     public boolean isDirty() {
@@ -120,5 +144,35 @@ public class PhysicsStructure {
 
     public int getCollidableCount() {
         return collidableBlocks.size();
+    }
+
+    public void shiftLocal(int dx, int dy, int dz) {
+        if (dx == 0 && dy == 0 && dz == 0) {
+            return;
+        }
+        Long2ObjectOpenHashMap<StructureBlockData> shifted = new Long2ObjectOpenHashMap<>(blocks.size());
+        for (var entry : blocks.long2ObjectEntrySet()) {
+            long key = entry.getLongKey();
+            int x = BlockPos.getX(key) + dx;
+            int y = BlockPos.getY(key) + dy;
+            int z = BlockPos.getZ(key) + dz;
+            shifted.put(BlockPos.asLong(x, y, z), entry.getValue());
+        }
+        blocks.clear();
+        blocks.putAll(shifted);
+
+        LongOpenHashSet shiftedCollidable = new LongOpenHashSet(collidableBlocks.size());
+        LongIterator iterator = collidableBlocks.iterator();
+        while (iterator.hasNext()) {
+            long key = iterator.nextLong();
+            int x = BlockPos.getX(key) + dx;
+            int y = BlockPos.getY(key) + dy;
+            int z = BlockPos.getZ(key) + dz;
+            shiftedCollidable.add(BlockPos.asLong(x, y, z));
+        }
+        collidableBlocks.clear();
+        collidableBlocks.addAll(shiftedCollidable);
+
+        originOffset.sub(dx, dy, dz);
     }
 }

@@ -27,6 +27,9 @@ public class WorldBoundaryHandler {
         if (entity.level().isClientSide()) {
             return;
         }
+        if (!Config.WORLD_WRAP_ENABLED.get()) {
+            return;
+        }
 
         // Only wrap players (extend later if needed)
         if (!(entity instanceof Player)) {

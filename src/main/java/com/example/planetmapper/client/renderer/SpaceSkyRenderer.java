@@ -32,7 +32,6 @@ public class SpaceSkyRenderer {
     // Cached textures for procedural generation
     private static ResourceLocation sunTexture = null;
     private static ResourceLocation sunGlowTexture = null;
-    private static ResourceLocation earthTexture = null;
     private static ResourceLocation moonTexture = null;
     private static boolean texturesInitialized = false;
 
@@ -89,11 +88,6 @@ public class SpaceSkyRenderer {
             sunTexture = PlanetTextureGenerator.generateSunTexture();
             sunGlowTexture = PlanetTextureGenerator.generateSunGlowTexture();
             moonTexture = PlanetTextureGenerator.generateMoonTexture();
-            long seed = 0;
-            if (mc.getSingleplayerServer() != null) {
-                seed = mc.getSingleplayerServer().getWorldData().worldGenOptions().seed();
-            }
-            earthTexture = PlanetTextureGenerator.generateEarthTexture(seed);
             texturesInitialized = true;
         }
         // Hot-swap safe: new fields can be null even when texturesInitialized is true
@@ -153,7 +147,7 @@ public class SpaceSkyRenderer {
                 body.setTexture(sunTexture);
                 break;
             case PLANET:
-                body.setTexture(earthTexture);
+                body.setTexture(generateSeededPlanetTexture(body));
                 break;
             case MOON:
             case ASTEROID:
@@ -269,9 +263,29 @@ public class SpaceSkyRenderer {
         }
         switch (body.getType()) {
             case STAR -> body.setTexture(sunTexture);
-            case PLANET -> body.setTexture(earthTexture);
+            case PLANET -> body.setTexture(generateSeededPlanetTexture(body));
             case MOON, ASTEROID -> body.setTexture(moonTexture);
         }
+    }
+
+    private static ResourceLocation generateSeededPlanetTexture(CelestialBody body) {
+        long worldSeed = getWorldSeed(Minecraft.getInstance());
+        long seed = mixSeed(worldSeed, body.getId().getMostSignificantBits(), body.getId().getLeastSignificantBits());
+        return PlanetTextureGenerator.generateEarthTexture(seed);
+    }
+
+    private static long getWorldSeed(Minecraft mc) {
+        if (mc.getSingleplayerServer() != null) {
+            return mc.getSingleplayerServer().getWorldData().worldGenOptions().seed();
+        }
+        return 0L;
+    }
+
+    private static long mixSeed(long a, long b, long c) {
+        long result = a;
+        result ^= (b + 0x9E3779B97F4A7C15L + (result << 6) + (result >> 2));
+        result ^= (c + 0x9E3779B97F4A7C15L + (result << 6) + (result >> 2));
+        return result;
     }
 
     private static void drawStarGlow(PoseStack ps, float radius, float r, float g, float b) {
